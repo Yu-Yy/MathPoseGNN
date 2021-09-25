@@ -141,6 +141,7 @@ Tensor findConnectedJoints(Tensor hmsIn, Tensor rDepth, int rootIdx = 2, bool di
         predRootDepth[i] = dep;
     }
     // ordinal prior
+    
     auto sortDep = predRootDepth.sort(0, false);
     auto sortDepth = get<0>(sortDep);
     auto sortIndex = get<1>(sortDep);

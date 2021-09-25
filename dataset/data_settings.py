@@ -28,7 +28,7 @@ class MIX:
                   [0, 9], [9, 10], [10, 11],
                   [0, 3], [3, 4], [4, 5],
                   [2, 12], [12, 13], [13, 14],
-                  [2, 6], [6, 7], [7, 8]]
+                  [2, 6], [6, 7], [7, 8]]  # the connection way
     
     PAF.FLIP_CHANNEL = [0, 1, 2, 3, 10, 11, 12, 13, 14, 15, 4, 5, 6, 7, 8, 9, 
                         22, 23, 24, 25, 26, 27, 16, 17, 18, 19, 20, 21]
@@ -36,22 +36,28 @@ class MIX:
     PAF.NUM = len(PAF.VECTOR)
     PAF.LINE_WIDTH_THRE = 1
 
-    INPUT_SHAPE = (512, 832)  # height, width
+    INPUT_SHAPE = (512, 832) #(288,352) #(288,360) #  # height, width for others
     STRIDE = 4
-    OUTPUT_SHAPE = (INPUT_SHAPE[0] // STRIDE, INPUT_SHAPE[1] // STRIDE)
+    OUTPUT_SHAPE = (INPUT_SHAPE[0] // STRIDE, INPUT_SHAPE[1] // STRIDE) # low resolution
+    
     WIDTH_HEIGHT_RATIO = INPUT_SHAPE[1] / INPUT_SHAPE[0]
     
-    PREFIX = os.environ['PROJECT_HOME']
-    COCO_ROOT_PATH = osp.join(PREFIX, "data/coco2017")
-    COCO_JSON_PATH = osp.join(COCO_ROOT_PATH, 'annotations/coco_keypoints_train2017.json')
+    # PREFIX = os.environ['PROJECT_HOME']
+    # COCO_ROOT_PATH = osp.join(PREFIX, "data/coco2017")
+    # COCO_JSON_PATH = osp.join(COCO_ROOT_PATH, 'annotations/coco_keypoints_train2017.json')
     
-    USED_3D_DATASETS = ["MUCO"]
-    MUCO_ROOT_PATH = osp.join(PREFIX, "data/MuCo")
-    MUCO_JSON_PATH = osp.join(MUCO_ROOT_PATH, "annotations/MuCo.json")
-    CMUP_ROOT_PATH = osp.join(PREFIX, "data/Panoptic")
-    CMUP_JSON_PATH = osp.join(CMUP_ROOT_PATH, 'annotations/Panoptic.json')
-    H36M_ROOT_PATH = osp.join(PREFIX, "data/Human3.6M")
-    H36M_JSON_PATH = osp.join(H36M_ROOT_PATH, "annotations/H36M.json")
+    # USED_3D_DATASETS = ["MUCO"]
+    # MUCO_ROOT_PATH = osp.join(PREFIX, "data/MuCo")
+    # MUCO_JSON_PATH = osp.join(MUCO_ROOT_PATH, "annotations/MuCo.json")
+
+    CMUP_ROOT_PATH = '/Extra/panzhiyu/CMU_data' #osp.join(PREFIX, "data/Panoptic")   # target dataset
+    CMUP_JSON_PATH = osp.join(CMUP_ROOT_PATH, 'cmu_data_train_multi.pkl') # using pickle file 'cmu_data_train.pkl'cmu_data_train_multi.pkl
+
+    CAMP_ROOT_PATH = '/Extra/panzhiyu/CampusSeq1' #osp.join(PREFIX, "data/Panoptic")   # target dataset
+    CAMP_JSON_PATH = osp.join(CAMP_ROOT_PATH, 'campus_meta_multi.pkl') # using pickle file 'cmu_data_train.pkl'
+
+    # H36M_ROOT_PATH = osp.join(PREFIX, "data/Human3.6M")
+    # H36M_JSON_PATH = osp.join(H36M_ROOT_PATH, "annotations/H36M.json")
 
     TRAIN = edict()
     TRAIN.CENTER_TRANS_MAX = 40
@@ -61,7 +67,7 @@ class MIX:
     TRAIN.SCALE_MAX = 1.1
     TRAIN.SCALE_MIN = 0.8
 
-    TRAIN.GAUSSIAN_KERNELS = [(15, 15), (11, 11), (9, 9), (7, 7), (5, 5)]
+    TRAIN.GAUSSIAN_KERNELS = [(15, 15), (11, 11), (9, 9), (7, 7), (5, 5)] # five different gaussian kernel ?(course to fine)
 
 
 def load_dataset(name):

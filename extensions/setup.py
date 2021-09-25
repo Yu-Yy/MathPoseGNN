@@ -9,8 +9,8 @@ ext_modules=[
         'gpu/bodyPartConnectorBase.cu',
         'gpu/cuda_cal.cu',
         ], 
-        include_dirs=['/usr/local/cuda/include', '/usr/local/lib'] ,   # '/usr/include/eigen3'
-    ),         
+        include_dirs=['/usr/local/cuda-10.1/include', '/usr/local/lib'] ,   # '/usr/include/eigen3'   '/usr/local/cuda-11.1/include'
+    ),          
 ]
 
 setup(

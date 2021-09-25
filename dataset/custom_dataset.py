@@ -43,7 +43,7 @@ class CustomDataset(Dataset):
         crop_x = self.net_input_shape[0]  # width
         crop_y = self.net_input_shape[1]  # height
         scale['scale'] = min(crop_x / self.image_shape[0], crop_y / self.image_shape[1])
-        img = cv2.resize(img, (0, 0), fx=scale['scale'], fy=scale['scale'])
+        img = cv2.resize(img, (0, 0), fx=scale['scale'], fy=scale['scale']) # for resize img
         
         scale['img_width'] = self.image_shape[0]
         scale['img_height'] = self.image_shape[1]

@@ -7,7 +7,7 @@ def generate_heatmap(bodys, output_shape, stride, keypoint_num, kernel=(7, 7)):
 
     for i in range(keypoint_num):
         for j in range(len(bodys)):
-            if bodys[j][i][3] < 1:
+            if bodys[j][i][3] < 1: # 不可见
                 continue
             target_y = bodys[j][i][1] / stride
             target_x = bodys[j][i][0] / stride
@@ -21,16 +21,17 @@ def generate_heatmap(bodys, output_shape, stride, keypoint_num, kernel=(7, 7)):
     return heatmaps
 
 def generate_rdepth(meta, stride, root_idx, max_people):
-    bodys = meta['bodys']
+    bodys = meta['bodys'] 
     scale = meta['scale']
     rdepth = np.zeros((max_people, 3), dtype='float32')
     for j in range(len(bodys)):
-        if bodys[j][root_idx, 3] < 1 or j >= max_people:
+        if bodys[j][root_idx, 3] < 1 or j >= max_people: # not consider occlusion?
             continue
         rdepth[j, 0] = bodys[j][root_idx, 1] / stride
         rdepth[j, 1] = bodys[j][root_idx, 0] / stride
-        rdepth[j, 2] = bodys[j][root_idx, 2] / bodys[j][root_idx, 7] / scale  # normalize by f and scale
-    rdepth = rdepth[np.argsort(-rdepth[:, 2])]
+        rdepth[j, 2] = bodys[j][root_idx, 2] / bodys[j][root_idx, 7] / scale  # normalize by f and scale 7 idx is the (all is the division) # X Y Z is in camera coordinate
+    rdepth = rdepth[np.argsort(-rdepth[:, 2])] # 经过由远到近的排序
+
     return rdepth
 
 def generate_paf(bodys, output_shape, params_transform, paf_num, paf_vector, paf_thre, with_mds):
@@ -39,14 +40,14 @@ def generate_paf(bodys, output_shape, params_transform, paf_num, paf_vector, paf
     for i in range(paf_num):
         for j in range(len(bodys)):
             if paf_thre > 1 and with_mds:
-                if bodys[j][paf_vector[i][0]][3] < 2 or bodys[j][paf_vector[i][1]][3] < 2:
+                if bodys[j][paf_vector[i][0]][3] < 2 or bodys[j][paf_vector[i][1]][3] < 2: # root depth 监督是否对遮挡敏感
                     continue
             elif bodys[j][paf_vector[i][0]][3] < 1 or bodys[j][paf_vector[i][1]][3] < 1:
                 continue
             centerA = np.array(bodys[j][paf_vector[i][0]][:3], dtype=int)
             centerB = np.array(bodys[j][paf_vector[i][1]][:3], dtype=int)
             pafs[i*3:i*3+3], count[i] = putVecMaps3D(centerA, centerB, pafs[i*3:i*3+3], count[i], \
-                                                     params_transform, paf_thre)
+                                                     params_transform, paf_thre)  # 一次3个通道 前两个 paf, 后一个relative depth
     pafs[0::3] *= 127
     pafs[1::3] *= 127
 

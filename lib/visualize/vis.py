@@ -26,6 +26,7 @@ def vis_result():
         data = json.load(f)['3d_pairs']
 
     for idata in data:
+        # import pdb; pdb.set_trace()
         pred_3d = np.array(idata['pred_3d'])
         img_path = osp.join(args.img_dir, idata['image_path'])
         img = cv2.imread(img_path)[:, :, ::-1]

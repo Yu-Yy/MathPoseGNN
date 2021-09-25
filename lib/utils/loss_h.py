@@ -17,9 +17,9 @@ class DepthLoss(nn.Module):
         assert output_num == 1
         loss, count = 0., 0
         for i in range(batch_size):
-            for j in range(len(rdepth[i])):
-                if rdepth[i, j, 2] > 0:
-                    loss += torch.abs(output[i, 0, int(rdepth[i][j][0]), int(rdepth[i][j][1])] - rdepth[i][j][2])
+            for j in range(len(rdepth[i])): # 便利人数
+                if rdepth[i, j, 2] > 0: # 不是空的人
+                    loss += torch.abs(output[i, 0, int(rdepth[i][j][0]), int(rdepth[i][j][1])] - rdepth[i][j][2])  # it use the ground truth index (how about the occlusion label)
                     count += 1
         if count == 0:   # used for forward
             loss += torch.abs(output[0, 0, 1, 1] - rdepth[0][0][2])
@@ -55,7 +55,7 @@ class JointsL2Loss(nn.Module):
                 keypoint_num = output.shape[1] - self.paf_num * 2
                 keypoint_loss = tmp_loss[:, :keypoint_num]
                 paf_loss = tmp_loss[:, keypoint_num:]
-                keypoint_topk_val, keypoint_topk_id = torch.topk(keypoint_loss, k=self.topk, dim=1, sorted=False)
+                keypoint_topk_val, keypoint_topk_id = torch.topk(keypoint_loss, k=self.topk, dim=1, sorted=False) # B, J,  1
                 paf_topk_val, paf_topk_id = torch.topk(paf_loss, k=self.topk*2, dim=1, sorted=False)
                 loss = keypoint_topk_val.mean() + paf_topk_val.mean()
         

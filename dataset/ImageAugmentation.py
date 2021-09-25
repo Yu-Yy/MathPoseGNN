@@ -61,7 +61,7 @@ def aug_croppad(meta, img, params_transform, with_augmentation=True):
     crop_y = int(params_transform['crop_size_y'])
    
     scale = min(params_transform['crop_size_x'] / float(img.shape[1]),
-                params_transform['crop_size_y'] / float(img.shape[0]))
+                params_transform['crop_size_y'] / float(img.shape[0])) # scale without distortion
                 
     if with_augmentation:
         scale *= scale_multiplier

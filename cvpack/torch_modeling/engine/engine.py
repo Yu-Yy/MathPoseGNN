@@ -57,7 +57,8 @@ class Engine(object):
             self.world_size = int(os.environ['WORLD_SIZE'])  # nproc_per_node * node
             # self.world_rank = int(os.environ['RANK'])
             torch.cuda.set_device(self.local_rank)
-            dist.init_process_group(backend="nccl", init_method='env://')
+            dist_url = self.args.dist_url #'env://'
+            dist.init_process_group(backend="nccl", init_method=dist_url, world_size=self.world_size, rank=self.local_rank)  # 'env://', rank=1, world_size=self.world_size
             dist.barrier()
             self.devices = [i for i in range(self.world_size)]
         else:
@@ -81,8 +82,12 @@ class Engine(object):
             dest="continue_fpath",
             help='continue from one certain checkpoint')
         self.parser.add_argument(
-            '--local_rank', default=0, type=int,
+            '--local_rank', default=0, type=int,  # local ranking ?
             help='process rank on node')
+        self.parser.add_argument('--dist_url',
+                        default='tcp://127.0.0.1:23456',
+                        type=str,
+                        help='url used to set up distributed training')
 
     def register_state(self, **kwargs):
         self.state.register(**kwargs)
@@ -120,6 +125,40 @@ class Engine(object):
 
         self.logger.info(
             "Save checkpoint to file {}, "
+            "Time usage:\n\tprepare snapshot: {}, IO: {}".format(
+                path, t_io_begin - t_start, t_end - t_io_begin))
+
+
+    def save_best_model(self, path):
+        self.logger.info("Saving best model to file {}".format(path))
+        t_start = time.time()
+
+        state_dict = {}
+        new_state_dict = OrderedDict()
+
+        for k, v in self.state.model.state_dict().items():
+            key = k
+            if k.split('.')[0] == 'module':
+                key = k[7:]
+            new_state_dict[key] = v
+        state_dict['model'] = new_state_dict
+
+        if self.state.optimizer:
+            state_dict['optimizer'] = self.state.optimizer.state_dict()
+        if self.state.scheduler:
+            state_dict['scheduler'] = self.state.scheduler.state_dict()
+        if self.state.iteration:
+            state_dict['iteration'] = self.state.iteration
+
+        t_io_begin = time.time()
+        torch.save(state_dict, path)
+        t_end = time.time()
+
+        del state_dict
+        del new_state_dict
+
+        self.logger.info(
+            "Save best model to file {}, "
             "Time usage:\n\tprepare snapshot: {}, IO: {}".format(
                 path, t_io_begin - t_start, t_end - t_io_begin))
 

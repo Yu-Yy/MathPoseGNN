@@ -1,9 +1,8 @@
-export PROJECT_HOME='/path/to/SMAP'
+export CUDA_VISIBLE_DEVICES="7"
+export PROJECT_HOME='/home/panzhiyu/project/3d_pose/SMAP'
 export PYTHONPATH=$PYTHONPATH:$PROJECT_HOME
-python test.py -p "/path/to/SMAP_model.pth" \
--t run_inference \
+#   '/home/panzhiyu/project/3d_pose/SMAP/model_logs_campusE2/stage3_root2/iter-5000.pth' '/home/panzhiyu/project/3d_pose/SMAP/model_logs_0816/stage3_root2/iter-last.pth'
+python test_.py -p  "/home/panzhiyu/project/3d_pose/SMAP/model_logs_0629/stage3_root2/best_model.pth" \
+-t generate_result \
 -d test \
--rp "/path/to/RefineNet.pth" \
---batch_size 16 \
---do_flip 1 \
---dataset_path "/path/to/custom/image_dir"
+--batch_size 16

@@ -9,10 +9,10 @@ def make_optimizer(cfg, model, num_gpu):
     return optimizer
 
 
-def make_lr_scheduler(cfg, optimizer):
+def make_lr_scheduler(cfg, optimizer):  # TODO: need to re-match the logic
     w_iters = cfg.SOLVER.WARMUP_ITERS
     w_fac = cfg.SOLVER.WARMUP_FACTOR
-    max_iter = cfg.SOLVER.MAX_ITER
+    max_iter = cfg.SOLVER.MAX_ITER # using max_iter as the standard
     lr_lambda = lambda iteration : w_fac + (1 - w_fac) * iteration / w_iters \
             if iteration < w_iters \
             else 1 - (iteration - w_iters) / (max_iter - w_iters)

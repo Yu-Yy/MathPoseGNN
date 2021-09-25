@@ -1,0 +1,22 @@
+# ninja log v5
+0	1154	1599760130682153370	/Extra/fanbohao/fbh_code/Monocular-3D/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/bodyPartConnectorBase.o	ece88b00adeb9514
+1	1330	1599760130858196607	/Extra/fanbohao/fbh_code/Monocular-3D/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/cuda_cal.o	d889c55041d2aee7
+1	5011	1599760134535093109	/Extra/fanbohao/fbh_code/Monocular-3D/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/nmsBase.o	a9eeee2532e0dfbc
+0	25020	1599792864693461398	/Extra/fanbohao/fbh_code/Monocular-3D/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	ebcb407690ec88e0
+1	1131	1610463300129051298	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/bodyPartConnectorBase.o	5e8000da5d7e0d43
+0	1439	1610463300437052097	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/cuda_cal.o	f731b7c48f05dc56
+0	4430	1610463303425059836	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/nmsBase.o	a6a453bbc3ede22d
+0	24587	1610463323581111913	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	9bcd30736c06842d
+6	1136	1610463347425173234	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/bodyPartConnectorBase.o	e0b236411ca139eb
+5	1409	1610463347697173932	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/cuda_cal.o	1dae794fdb6b580f
+5	4961	1610463351245183031	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/nmsBase.o	bad3bd20f8816e54
+4	24057	1610463370341231892	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	b5009743274876c0
+11	26267	1624360578026661196	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	107910b10ea1f613
+3	1070	1626961726982322788	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/bodyPartConnectorBase.o	203506af94739619
+3	1308	1626961727218322796	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/cuda_cal.o	c86aa21d39483234
+3	4410	1626961730318322901	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/nmsBase.o	17744f123b7edd5f
+2	22779	1626961748682323521	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	987bf47a447b669f
+13	1277	1632476996709674397	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/bodyPartConnectorBase.o	4c6c75ddbff44873
+13	1469	1632476996897674404	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/cuda_cal.o	553de62523270e9a
+12	4839	1632477000265674517	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/gpu/nmsBase.o	cd1a092b21673a6d
+12	24178	1632477019601675170	/home/panzhiyu/project/3d_pose/SMAP/extensions/build/temp.linux-x86_64-3.8/association.o	f9008f2b99c8386c

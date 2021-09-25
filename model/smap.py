@@ -146,6 +146,7 @@ class ResNet_downsample_module(nn.Module):
             x2 = x2 + skip1[1] + skip2[1]
         x3 = self.layer3(x2)
         if self.has_skip:
+
             x3 = x3 + skip1[2] + skip2[2]
         x4 = self.layer4(x3)
         if self.has_skip:
@@ -213,12 +214,16 @@ class Upsample_unit(nn.Module):
         if self.ind > 0:
             up_x = F.interpolate(up_x, size=self.up_size, mode='bilinear', align_corners=True)
             up_x = self.up_conv(up_x)
+            # # judge the dim
+            # if up_x.shape[-1] != out.shape[-1]:
+            #     # import pdb; pdb.set_trace()
+            #     out = out[...,:up_x.shape[-1]]
             out += up_x 
-        out = self.relu(out)
+        out = self.relu(out) # last non-processed feature
 
         res = self.res_conv1(out)
         res = self.res_conv2(res)
-        res = F.interpolate(res, size=self.output_shape, mode='bilinear', align_corners=True)
+        res = F.interpolate(res, size=self.output_shape, mode='bilinear', align_corners=True)  # according to the interpolate
 
         res_d = self.res_d_conv1(out)
         res_d = self.res_d_conv2(res_d)
@@ -276,18 +281,16 @@ class Upsample_module(nn.Module):
         out3, res3, res_d3, res_rd3, skip1_3, skip2_3, _ = self.up3(x2, out2)
         out4, res4, res_d4, res_rd4, skip1_4, skip2_4, cross_conv = self.up4(x1, out3)
 
-        # 'res' starts from small size
+        # 'res' starts from small size 
         res = [res1, res2, res3, res4]
         res_d = [res_d1, res_d2, res_d3, res_d4]
         res_rd = [res_rd1, res_rd2, res_rd3, res_rd4]
         skip1 = [skip1_4, skip1_3, skip1_2, skip1_1]
         skip2 = [skip2_4, skip2_3, skip2_2, skip2_1]
-
-        return res, res_d, res_rd, skip1, skip2, cross_conv
+        return res, res_d, res_rd, skip1, skip2, cross_conv, out4
 
 
 class Single_stage_module(nn.Module):
-
     def __init__(self, output_chl_num, output_shape, has_skip=False,
             gen_skip=False, gen_cross_conv=False, chl_num=256, efficient=False,
             zero_init_residual=False,):
@@ -304,19 +307,17 @@ class Single_stage_module(nn.Module):
                 self.chl_num, self.gen_skip, self.gen_cross_conv, efficient)
 
     def forward(self, x, skip1, skip2):
-        x4, x3, x2, x1 = self.downsample(x, skip1, skip2)
-        res, res_d, res_rd, skip1, skip2, cross_conv = self.upsample(x4, x3, x2, x1)
-        
-        return res, res_d, res_rd, skip1, skip2, cross_conv
+        x4, x3, x2, x1 = self.downsample(x, skip1, skip2) # x4 is the lowest image feature
+        res, res_d, res_rd, skip1, skip2, cross_conv, out4 = self.upsample(x4, x3, x2, x1)
+        return res, res_d, res_rd, skip1, skip2, cross_conv, out4
 
 
 class SMAP(nn.Module):
-    
     def __init__(self, cfg, run_efficient=False, **kwargs):
         super(SMAP, self).__init__()
 
         self.stage_num = cfg.MODEL.STAGE_NUM
-        
+
         self.kpt_paf_num = cfg.DATASET.KEYPOINT.NUM + cfg.DATASET.PAF.NUM*2
         self.keypoint_num = cfg.DATASET.KEYPOINT.NUM
         self.paf_num = cfg.DATASET.PAF.NUM
@@ -326,20 +327,20 @@ class SMAP(nn.Module):
         self.ohkm = cfg.LOSS.OHKM
         self.topk = cfg.LOSS.TOPK
         self.ctf = cfg.LOSS.COARSE_TO_FINE
-        
+
         self.top = ResNet_top()
         self.modules_stages = list() 
         for i in range(self.stage_num):
-            if i == 0:
+            if i == 0: # init module does not has skip
                 has_skip = False
             else:
                 has_skip = True
-            if i != self.stage_num - 1:
+            if i != self.stage_num - 1:  # Last stage does not generate skip
                 gen_skip = True
                 gen_cross_conv = True
             else:
                 gen_skip = False 
-                gen_cross_conv = False 
+                gen_cross_conv = False # get the conv feature for the encoding last feature
             self.modules_stages.append(
                     Single_stage_module(
                         [self.kpt_paf_num, self.paf_num], self.output_shape,
@@ -360,20 +361,21 @@ class SMAP(nn.Module):
         if self.ohkm:
             loss2d_2 = JointsL2Loss(has_ohkm=self.ohkm, topk=self.topk, paf_num=self.paf_num)
             loss3d_2 = JointsL2Loss(has_ohkm=self.ohkm, topk=self.topk, paf_num=0)
+        
         loss_depth = DepthLoss()
         loss, loss_2d, loss_bone, loss_root = 0., 0., 0., 0.
-        for i in range(self.stage_num):
-            for j in range(4):  # multi-scale
+        for i in range(self.stage_num): # multi-stage and multi  (kernel size)
+            for j in range(4):  # multi
                 ind = j
-                if i == self.stage_num - 1 and self.ctf:  # coarse-to-fine
-                    ind += 1 
+                if i == self.stage_num - 1 and self.ctf:  # coarse-to-fine just for heatmap prediction
+                    ind += 1 # for the last output
                 tmp_labels = labels[:, ind, :, :, :]
                 keypoint_labels = tmp_labels[:, :self.keypoint_num, :, :]
                 paf_labels = tmp_labels[:, self.keypoint_num:, :, :]
                 paf_index = [idx for idx in range(3*self.paf_num) if idx % 3 != 2]
                 tmp_labels_2d = torch.cat([keypoint_labels,
                                            paf_labels[:, paf_index, :, :]], 1)
-                tmp_labels_3d = paf_labels[:, 2::3, :, :]
+                tmp_labels_3d = paf_labels[:, 2::3, :, :] # 3 is the step  # the way to extract the paf and depth label
 
                 if j == 3 and self.ohkm:
                     tmp_loss_2d = loss2d_2(outputs['heatmap_2d'][i][j],
@@ -399,7 +401,7 @@ class SMAP(nn.Module):
                 loss += tmp_loss
 
         return dict(total_loss=loss, loss_2d=loss_2d, loss_bone=loss_bone, loss_root=loss_root)
-        
+
     def forward(self, imgs, valids=None, labels=None, rdepth=None):
         x = self.top(imgs)
         skip1 = None
@@ -408,14 +410,16 @@ class SMAP(nn.Module):
         outputs['heatmap_2d'] = list()
         outputs['det_d'] = list()
         outputs['root_d'] = list()
+        outputs['feature'] = list()
         for i in range(self.stage_num):
-            res, res_d, res_rd, skip1, skip2, x = eval('self.stage' + str(i))(x, skip1, skip2)
+            res, res_d, res_rd, skip1, skip2, x, raw_feature = eval('self.stage' + str(i))(x, skip1, skip2)
             outputs['heatmap_2d'].append(res)
             outputs['det_d'].append(res_d)
             outputs['root_d'].append(res_rd)
+            outputs['feature'].append(raw_feature)
 
         if valids is None and labels is None:
-            outputs_2d = (outputs['heatmap_2d'][-1][-1] + outputs['heatmap_2d'][-1][-2] + outputs['heatmap_2d'][-1][-3])
-            return outputs_2d, outputs['det_d'][-1][-1], outputs['root_d'][-1][-1]
+            outputs_2d = (outputs['heatmap_2d'][-1][-1] + outputs['heatmap_2d'][-1][-2] + outputs['heatmap_2d'][-1][-3]) # 不同尺度的求和相加？
+            return outputs_2d, outputs['det_d'][-1][-1], outputs['root_d'][-1][-1], outputs['feature'][-1]
         else:
-            return self._calculate_loss(outputs, valids, labels, rdepth)
+            return self._calculate_loss(outputs, valids, labels, rdepth), outputs

@@ -55,7 +55,11 @@ def get_train_loader(cfg, num_gpu, is_dist=True, is_shuffle=True, start_iter=0,
             valids = torch.stack(transposed_batch[1], dim=0)
             labels = torch.stack(transposed_batch[2], dim=0)
             rdepth = torch.stack(transposed_batch[3], dim=0)
-            return images, valids, labels, rdepth
+            camera_para = transposed_batch[4]
+            joints3d_global = torch.stack(transposed_batch[5], dim=0)
+            joints3d_local = torch.stack(transposed_batch[6], dim=0)
+            scale = transposed_batch[7]
+            return images, valids, labels, rdepth, camera_para, joints3d_global, joints3d_local, scale
 
     data_loader = torch.utils.data.DataLoader(
             dataset, num_workers=cfg.DATALOADER.NUM_WORKERS,
@@ -99,15 +103,20 @@ def get_test_loader(cfg, num_gpu, local_rank, stage, use_augmentation=False, wit
 
         def __call__(self, batch):
             transposed_batch = list(zip(*batch))
+            # images = torch.stack(transposed_batch[0], dim=0)
+            # meta_data = torch.stack(transposed_batch[1], dim=0)
+            # img_path = transposed_batch[2]
+            # scale = transposed_batch[3]
             images = torch.stack(transposed_batch[0], dim=0)
-            meta_data = torch.stack(transposed_batch[1], dim=0)
-            img_path = transposed_batch[2]
-            scale = transposed_batch[3]
-            return images, meta_data, img_path, scale
+            cam_para = transposed_batch[1]
+            joints3d_global = torch.stack(transposed_batch[2], dim=0)
+            joints3d_local = torch.stack(transposed_batch[3], dim=0)
+            scale = transposed_batch[4]
+            return images, cam_para, joints3d_global, joints3d_local, scale
 
     data_loader = torch.utils.data.DataLoader(
             subset, num_workers=cfg.DATALOADER.NUM_WORKERS,
             batch_sampler=batch_sampler,
-            collate_fn=BatchCollator(cfg.DATALOADER.SIZE_DIVISIBILITY), )
+            collate_fn=BatchCollator(cfg.DATALOADER.SIZE_DIVISIBILITY),)
 
     return data_loader
