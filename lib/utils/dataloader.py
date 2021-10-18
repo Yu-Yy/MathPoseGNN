@@ -7,7 +7,7 @@ from cvpack.dataset import torch_samplers
 
 from dataset.data_settings import load_dataset
 from dataset.base_dataset import JointDataset
-
+from dataset.gnn_dataset import GNNdataset
 
 def get_train_loader(cfg, num_gpu, is_dist=True, is_shuffle=True, start_iter=0, 
                      use_augmentation=True, with_mds=False):
@@ -67,6 +67,57 @@ def get_train_loader(cfg, num_gpu, is_dist=True, is_shuffle=True, start_iter=0,
             collate_fn=BatchCollator(cfg.DATALOADER.SIZE_DIVISIBILITY), )
 
     return data_loader
+
+
+def get_traingnn_loader(cfg, num_gpu, data_dir ,is_dist=True, is_shuffle=True, start_iter=0):
+    # -------- get raw dataset interface -------- #
+    dataset = GNNdataset(data_dir)
+
+    # -------- make samplers -------- #
+    if is_dist:
+        sampler = torch_samplers.DistributedSampler(
+                dataset, shuffle=is_shuffle)
+    elif is_shuffle:
+        sampler = torch.utils.data.sampler.RandomSampler(dataset)
+    else:
+        sampler = torch.utils.data.sampler.SequentialSampler(dataset)
+
+    images_per_gpu = cfg.SOLVER.IMG_PER_GPU
+
+    aspect_grouping = [1] if cfg.DATALOADER.ASPECT_RATIO_GROUPING else []
+    if aspect_grouping:
+        batch_sampler = torch_samplers.GroupedBatchSampler(
+                sampler, dataset, aspect_grouping, images_per_gpu,
+                drop_uneven=False)
+    else:
+        batch_sampler = torch.utils.data.sampler.BatchSampler(
+                sampler, images_per_gpu, drop_last=False)
+
+    batch_sampler = torch_samplers.IterationBasedBatchSampler(
+            batch_sampler, cfg.SOLVER.MAX_ITER, start_iter)
+
+    # -------- make data_loader -------- #
+    class BatchCollator(object):
+        def __init__(self, size_divisible):
+            self.size_divisible = size_divisible
+
+        def __call__(self, batch):
+            transposed_batch = list(zip(*batch))
+            matched_pred_single = transposed_batch[0]
+            matched_pred3d = torch.stack(transposed_batch[1], dim=0)
+            gt_3d = torch.stack(transposed_batch[2], dim=0)
+            gt_bodys_2d = transposed_batch[3]
+            cam_info = transposed_batch[4]
+            
+            return matched_pred_single, matched_pred3d, gt_3d, gt_bodys_2d, cam_info
+
+    data_loader = torch.utils.data.DataLoader(
+            dataset, num_workers=cfg.DATALOADER.NUM_WORKERS,
+            batch_sampler = batch_sampler,
+            ) #collate_fn=BatchCollator(cfg.DATALOADER.SIZE_DIVISIBILITY)
+
+    return data_loader
+
 
 
 def get_test_loader(cfg, num_gpu, local_rank, stage, use_augmentation=False, with_mds=False):

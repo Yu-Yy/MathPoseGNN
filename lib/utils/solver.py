@@ -1,7 +1,7 @@
 import torch.optim as optim
 
 def make_optimizer(cfg, model, num_gpu):
-    optimizer = optim.Adam(model.parameters(),
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), #model.parameters()
             lr=cfg.SOLVER.BASE_LR * num_gpu,
             betas=(0.9, 0.999), eps=1e-08,
             weight_decay=cfg.SOLVER.WEIGHT_DECAY)

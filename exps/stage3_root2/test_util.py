@@ -12,11 +12,14 @@ import time
 
 from torch.optim.optimizer import Optimizer
 
-from config import cfg
+from exps.stage3_root2.config import cfg
+# from config import cfg
 from lib.utils.post_3d import get_3d_points, back_to_global, get_3d_points_torch, back_to_global_torch, projectjointsPoints, projectjointsPoints_cp, projectjointsPoints_torch
 from exps.stage3_root2.pointnet2_pro.pointnet2_modules import PointnetSAModuleDebug
 from scipy.optimize import linear_sum_assignment
 from exps.stage3_root2.optimization_util import optimize_step
+
+
 
 joint_to_limb_heatmap_relationship = cfg.DATASET.PAF.VECTOR
 paf_z_coords_per_limb = list(range(cfg.DATASET.KEYPOINT.NUM))
@@ -91,7 +94,7 @@ def generate_relZ(pred_bodys, paf_3d_upsamp, root_d_upsamp, scale, view_idx ,num
                     intermed_paf[intermed_paf > max_val] = max_val
                     mean_val = np.mean(intermed_paf) # 求预测
                     depth_v[i][k] = mean_val # 均值作为连接深度的值
-            chain_bones(pred_bodys, depth_v, i, depth_0=0) # connect the depth
+            chain_bones(pred_bodys, depth_v, i, depth_0=0.7) # connect the depth # control the depth_
     return depth_roots_pred
 
 def generate_relZ_torch(pred_bodys, paf_3d_upsamp, root_d_upsamp, scale, view_idx ,device,num_intermed_pts=10, root_n=2):
@@ -381,7 +384,7 @@ def generate_pc_connection(pred_2d, cam_p, scale, batch_pc, indx_match, select_2
             ul = [int(mu_x - tmp_size), int(mu_y - tmp_size)]
             br = [int(mu_x + tmp_size), int(mu_y + tmp_size)]
             unit_pc_num = (tmp_size*2)**2
-            if extract_pose[k,3] <= 0.3 or ul[0] >= scale['img_width'] or ul[1] >= scale['img_height'] or br[0] < 0 or br[1] < 0: 
+            if extract_pose[k,3] <= 0.1 or ul[0] >= scale['img_width'] or ul[1] >= scale['img_height'] or br[0] < 0 or br[1] < 0:  # TODO: 超参数，信赖度阈值
                 invalid_idx = -1 * np.ones((1,(tmp_size*2)**2)) # init for the batch dim
                 indx_match[k][batch_idx].append(invalid_idx)
                 continue
@@ -401,12 +404,17 @@ def generate_pc_connection(pred_2d, cam_p, scale, batch_pc, indx_match, select_2
             # generate the pc's
             x_scope, y_scope = np.meshgrid(range(img_x[0], img_x[1]), range(img_y[0],img_y[1]))
             cor_2d = np.concatenate([x_scope.reshape(-1,1), y_scope.reshape(-1,1)], axis=1)
+            
             pc = back_to_global(cor_2d, depth_val, cam_p['K'], cam_p['distCoef'],cam_p['R'], cam_p['t'])
             # generate the radiation direction
             pc_deep = back_to_global(cor_2d, depth_val + 10, cam_p['K'], cam_p['distCoef'],cam_p['R'], cam_p['t'])
             pc_direction = pc_deep - pc
             pc_direction = pc_direction / np.linalg.norm(pc_direction, axis=-1,keepdims=True)
             new_pc = np.concatenate([pc,pc_direction], axis = -1)
+            if new_pc.shape[0] != (tmp_size*2)**2: # border problem # TODO: bug
+                invalid_idx = -1 * np.ones((1,(tmp_size*2)**2)) # init for the batch dim
+                indx_match[k][batch_idx].append(invalid_idx)
+                continue
             assert new_pc.shape[0] == (tmp_size*2)**2, 'size mismatch'
 
             # match 2d (get every pc's center)
@@ -416,9 +424,10 @@ def generate_pc_connection(pred_2d, cam_p, scale, batch_pc, indx_match, select_2
             match_2d_deep = back_to_global(cor_2d_center, depth_val+10, cam_p['K'], cam_p['distCoef'],cam_p['R'], cam_p['t'])
             match_direction = match_2d_deep - match_2d
             match_direction = match_direction / np.linalg.norm(match_direction, axis=-1,keepdims=True)
-            match_center = np.concatenate([match_2d, match_direction], axis=-1)
+            match_vis = np.repeat(extract_pose[k:k+1,3:4], unit_pc_num, axis=0)
+            match_center = np.concatenate([match_2d, match_direction, match_vis], axis=-1)
             assert match_center.shape[0] == (tmp_size*2)**2, 'size mismatch'
-
+            # add one dim as the reliable_value
             idx_init = len(batch_pc[k][batch_idx]) * (tmp_size*2)**2
             valid_index = np.arange(idx_init, idx_init + (tmp_size*2)**2)
             valid_index = valid_index[None, ...]
@@ -623,69 +632,69 @@ def PoseSolver(pred_centers, nms_masks, n_root = 0):  # connection using the nec
 
         
 
-# def align_2d(pred_bodys_3d, pose_2d_collect, cam_info):
-#     pred_bodys_3d_pos = pred_bodys_3d[:,:,:3]
-#     pred_num = pred_bodys_3d_pos.shape[0]
-#     kp_num = pred_bodys_3d_pos.shape[1]
-#     pred_bodys_3d_vis = (pred_bodys_3d[:,:,3] > 0)
-#     pred_bodys_3d_r = pred_bodys_3d_pos.reshape(-1,3)
+def align_2d(pred_bodys_3d, pose_2d_collect, cam_info):
+    pred_bodys_3d_pos = pred_bodys_3d[:,:,:3]
+    pred_num = pred_bodys_3d_pos.shape[0]
+    kp_num = pred_bodys_3d_pos.shape[1]
+    pred_bodys_3d_vis = (pred_bodys_3d[:,:,3] > 0)
+    pred_bodys_3d_r = pred_bodys_3d_pos.reshape(-1,3)
 
-#     align_2d_collect = []
-#     project_id_collect = []
-#     for per_2d, cam_p in zip(pose_2d_collect, cam_info):
-#         project_2d = projectjointsPoints_torch(pred_bodys_3d_r, cam_p['K'], cam_p['R'], cam_p['t'],cam_p['distCoef'])
-#         project_2d = project_2d.reshape(pred_num,kp_num,2)
-#         x_check = torch.bitwise_and(project_2d[:, :, 0] >= 0, 
-#                                     project_2d[:, :, 0] <= 1920 - 1) #(15,) bool
-#         y_check = torch.bitwise_and(project_2d[:, :, 1] >= 0,
-#                                     project_2d[:, :, 1] <= 1080 - 1) # just fix the coord
-#         check = torch.bitwise_and(x_check, y_check) # N
-#         er_match = dict()
-#         er_id = dict()
-#         for idx, (p_2d, p_check, vis_3d_p) in enumerate(zip(project_2d, check, pred_bodys_3d_vis)):
-#             match_check = p_check * vis_3d_p # valid project2d and valid region
-#             temp_er = []
-#             if torch.sum(match_check) < 5:
-#                 continue
-#             for off_2d in per_2d:
-#                 off_2d_pose = off_2d[:,:2]
-#                 off_2d_vis = (off_2d[:,2] > 0.5)
-#                 mask = match_check * off_2d_vis
-#                 if torch.sum(mask) == 0:
-#                     temp_er.append(1000)
-#                     continue
-#                 c_err = torch.mean(torch.norm(off_2d_pose[mask,...] - p_2d[mask,...], dim=-1))
-#                 temp_er.append(c_err)
-#             min_gt = torch.argmin(torch.tensor(temp_er))
-#             min_er = torch.min(torch.tensor(temp_er))
-#             if min_gt.item() in er_match.keys():
-#                 if min_er < er_match[min_gt.item()]:
-#                     er_match[min_gt.item()] = min_er
-#                     er_id[min_gt.item()] = idx
-#             else:
-#                 er_match[min_gt.item()] = min_er
-#                 er_id[min_gt.item()] = idx
+    align_2d_collect = []
+    project_id_collect = []
+    for per_2d, cam_p in zip(pose_2d_collect, cam_info):
+        project_2d = projectjointsPoints_torch(pred_bodys_3d_r, cam_p['K'], cam_p['R'], cam_p['t'],cam_p['distCoef'])
+        project_2d = project_2d.reshape(pred_num,kp_num,2)
+        x_check = torch.bitwise_and(project_2d[:, :, 0] >= 0, 
+                                    project_2d[:, :, 0] <= 1920 - 1) #(15,) bool
+        y_check = torch.bitwise_and(project_2d[:, :, 1] >= 0,
+                                    project_2d[:, :, 1] <= 1080 - 1) # just fix the coord
+        check = torch.bitwise_and(x_check, y_check) # N
+        er_match = dict()
+        er_id = dict()
+        for idx, (p_2d, p_check, vis_3d_p) in enumerate(zip(project_2d, check, pred_bodys_3d_vis)):
+            match_check = p_check * vis_3d_p # valid project2d and valid region
+            temp_er = []
+            if torch.sum(match_check) < 5:
+                continue
+            for off_2d in per_2d:
+                off_2d_pose = off_2d[:,:2]
+                off_2d_vis = (off_2d[:,2] > 0.5)
+                mask = match_check * off_2d_vis
+                if torch.sum(mask) == 0:
+                    temp_er.append(1000)
+                    continue
+                c_err = torch.mean(torch.norm(off_2d_pose[mask,...] - p_2d[mask,...], dim=-1))
+                temp_er.append(c_err)
+            min_gt = torch.argmin(torch.tensor(temp_er))
+            min_er = torch.min(torch.tensor(temp_er))
+            if min_gt.item() in er_match.keys():
+                if min_er < er_match[min_gt.item()]:
+                    er_match[min_gt.item()] = min_er
+                    er_id[min_gt.item()] = idx
+            else:
+                er_match[min_gt.item()] = min_er
+                er_id[min_gt.item()] = idx
         
-#         project_idx = torch.tensor(list(er_id.values()))
-#         match_idx = torch.tensor(list(er_id.keys()))
-#         if len(match_idx) == 0:
-#             align_2d_collect.append(None)
-#             project_id_collect.append(None)
-#             continue
-#         c_pose = per_2d[match_idx,...]
-#         check_new = check[match_idx,...]
-#         c_pose[:,:,2] = c_pose[:,:,2] * check_new # fuse two judgement
-#         align_2d_collect.append(c_pose)
-#         project_id_collect.append(project_idx)
+        project_idx = torch.tensor(list(er_id.values()))
+        match_idx = torch.tensor(list(er_id.keys()))
+        if len(match_idx) == 0:
+            align_2d_collect.append(None)
+            project_id_collect.append(None)
+            continue
+        c_pose = per_2d[match_idx,...]
+        check_new = check[match_idx,...]
+        c_pose[:,:,2] = c_pose[:,:,2] * check_new # fuse two judgement
+        align_2d_collect.append(c_pose)
+        project_id_collect.append(project_idx)
 
-#         # c_refined_2d = project_refined_2d[project_idx,...] # 借用匹配结果
-#         # check = check[project_idx,...]
-#         # vis_pose = (c_pose[...,2] > 0.5)
-#         # c_pose_pos = c_pose[:,:,:2]
-#         # total_mask = check * vis_pose * pred_bodys_3d_vis[project_idx,...]
-#         # loss = loss + torch.sum((torch.norm(c_refined_2d - c_pose_pos, dim=-1) ** 2) * total_mask)
+        # c_refined_2d = project_refined_2d[project_idx,...] # 借用匹配结果
+        # check = check[project_idx,...]
+        # vis_pose = (c_pose[...,2] > 0.5)
+        # c_pose_pos = c_pose[:,:,:2]
+        # total_mask = check * vis_pose * pred_bodys_3d_vis[project_idx,...]
+        # loss = loss + torch.sum((torch.norm(c_refined_2d - c_pose_pos, dim=-1) ** 2) * total_mask)
 
-#     return align_2d_collect, project_id_collect
+    return align_2d_collect, project_id_collect
 
 
 
@@ -696,25 +705,24 @@ def PoseSolver(pred_centers, nms_masks, n_root = 0):  # connection using the nec
 def optimize_3d(pred_bodys_3d, pose_2d_collect, cam_info ,device):
     # pred_bodys_3d is N x K x 3
     # the cam info need to converted to torch
-    
     # for cam_p in cam_info:
     #     for k, v in cam_p.items():
     #         cam_p[k] = torch.from_numpy(v).to(device).to(torch.float)
-
     # align_2d_pose, project_idx_collect = align_2d(pred_bodys_3d, pose_2d_collect, cam_info)
+
     pred_num = pred_bodys_3d.shape[0]
     kp_num = pred_bodys_3d.shape[1]
+
     reg_p = 0.01
-    refine_tool = optimize_step(reg_p, pred_num, kp_num,  device).to(device) #pred_bodys_3d[:,:,:3],
+    refine_tool = optimize_step(reg_p, pred_num, kp_num,  device).to(device) #
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, refine_tool.parameters()), lr = 1e-1)
     max_iter = 70
+
     for i in range(max_iter):
         refined_3d, loss = refine_tool(pred_bodys_3d, pose_2d_collect, cam_info)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-    
-    
     return refined_3d
 
 
@@ -730,30 +738,83 @@ def optimize_3d(pred_bodys_3d, pose_2d_collect, cam_info ,device):
     # prob.solve()
 
 
-def project_views(pred_bodys_3d_r, cam_info, scale):
+def project_views(pred_bodys_3d_r, cam_info):
     # pred_bodys_3d (1,15,4)
     # pred_num, kp_num, _ = pred_bodys_3d_r.shape
-    kp_num, _ = pred_bodys_3d_r.shape
+    batch, max_people, kp_num, _ = pred_bodys_3d_r.shape
     # pred_bodys_3d = pred_bodys_3d_r[:,:,:3]
-    pred_bodys_3d = pred_bodys_3d_r[:,:3]
-    # pred_bodys_3d = pred_bodys_3d.reshape(-1,3)
-    pred_vis = pred_bodys_3d_r[:,3]
+    pred_bodys_3d = pred_bodys_3d_r[...,:3]
+    pred_bodys_3d = pred_bodys_3d.reshape(-1,3)
+    pred_vis = pred_bodys_3d_r[...,3].reshape(-1)
     pred_2d_project = dict()
 
     for v,cam_p in cam_info.items():
         project_2d = projectjointsPoints_torch(pred_bodys_3d, cam_p['K'], cam_p['R'], cam_p['t'],cam_p['distCoef'])
         # project_2d = project_2d.reshape(pred_num,kp_num,2)
-        x_check = torch.bitwise_and(project_2d[:, 0] >= 0, 
+        x_check = torch.bitwise_and(project_2d[:, 0] >= 0,   # Keep the original
                                     project_2d[:, 0] <= 1920 - 1) #(15,) bool
         y_check = torch.bitwise_and(project_2d[:, 1] >= 0,
-                                    project_2d[ :, 1] <= 1080 - 1) # just fix the coord
+                                    project_2d[:, 1] <= 1080 - 1) # just fix the coord
         check = torch.bitwise_and(x_check, y_check) # N
         
-        project_2d[:, 0] =(project_2d[:, 0] + (scale['net_width']/scale['scale'][0]-scale['img_width'])/2) * scale['scale'][0]
-        project_2d[:, 1] =(project_2d[:, 1] + (scale['net_height']/scale['scale'][0]-scale['img_height'])/2) * scale['scale'][0] # different views has the same
+        # project_2d[:, 0] =(project_2d[:, 0] + (scale['net_width']/scale['scale'][0]-scale['img_width'])/2) * scale['scale'][0] # the same dataset has the same parameter
+        # project_2d[:, 1] =(project_2d[:, 1] + (scale['net_height']/scale['scale'][0]-scale['img_height'])/2) * scale['scale'][0] # different views has the same
+
+        # x_check = torch.bitwise_and(project_2d[:, 0] >= 0, 
+        #                             project_2d[:, 0] <= cfg.OUTPUT_SHAPE[1] - 1) #(15,) bool
+        # y_check = torch.bitwise_and(project_2d[:, 1] >= 0,
+        #                             project_2d[:, 1] <= cfg.OUTPUT_SHAPE[0] - 1) # just fix the coord
+        # check = torch.bitwise_and(x_check, y_check) # N
 
         pred_2d_vis = pred_vis * check
         pred_2d = torch.cat([project_2d, pred_2d_vis[:,None]], dim = -1)
-        pred_2d_project[v] = pred_2d
+        pred_2d[pred_2d[:,2]==0,:] = 0 # non_valid point set 0
+        pred_2d_project[v] = pred_2d.reshape(batch, max_people, kp_num, 3)
+
 
     return pred_2d_project
+
+# def matchgt(pred_3d_batch, gt_3d_batch):
+#     batch_size = pred_3d_batch.shape[0]
+#     matched_pred = torch.zeros(pred_3d_batch.shape).to(pred_3d_batch.device)
+#     matched_gt = torch.zeros(pred_3d_batch.shape).to(pred_3d_batch.device)
+#     for b in range(batch_size):
+#         pred_3d_b = pred_3d_batch[b,...]
+#         gt_3d = gt_3d_batch[b,...]
+#         pred_3d = pred_3d_b[...,:3] # N X K X 3
+#         pred_vis = pred_3d_b[...,3]
+#         gt_3d_position = gt_3d[...,:3]
+#         gt_vis = gt_3d[...,3]
+#         mpjpe_save = dict()
+#         mpjpe_id = dict()
+#         for idx, (pose, pose_vis) in enumerate(zip(pred_3d, pred_vis)):
+#             temp_mpjpe = []
+#             for (gt, gt_valid) in zip(gt_3d_position, gt_vis):
+#                 mask1 = (gt_valid > 0)
+#                 mask2 = (pose_vis > 0)
+#                 mask = mask1 * mask2
+#                 if torch.sum(mask) == 0:
+#                     temp_mpjpe.append(torch.tensor(550))
+#                     continue
+#                 c_mpjpe = torch.mean(torch.norm((pose[mask,:] - gt[mask,:]), dim=-1))
+#                 temp_mpjpe.append(c_mpjpe)
+#             min_gt = torch.argmin(torch.Tensor(temp_mpjpe))
+#             min_mpjpe = torch.min(torch.Tensor(temp_mpjpe))
+#             if min_gt.item() in mpjpe_save.keys():
+#                 if min_mpjpe < mpjpe_save[min_gt.item()]:
+#                     mpjpe_save[min_gt.item()] = min_mpjpe
+#                     mpjpe_id[min_gt.item()] = idx
+#             else:
+#                 mpjpe_save[min_gt.item()] = min_mpjpe
+#                 mpjpe_id[min_gt.item()] = idx
+#         # error_list = torch.Tensor(list(mpjpe_save.values()))
+#         # mask_label = (error_list < threshold)
+#         filtered_predid = list(mpjpe_id.values())
+#         filtered_pose = pred_3d_b[filtered_predid,...]
+#         filtered_gtid = list(mpjpe_id.keys())
+#         filtered_gt = gt_3d[filtered_gtid,...]
+#         pred_num = len(filtered_predid)
+#         matched_pred[b,:pred_num,...] = filtered_pose
+#         matched_gt[b,:pred_num,...] = filtered_gt
+    
+#     return matched_pred, matched_gt

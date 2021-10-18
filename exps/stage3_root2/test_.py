@@ -149,11 +149,16 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                         scale['cx'] = scale['img_width']/2
                         scale['cy'] = scale['img_height']/2
 
+                    # process the focal length for campus and shelf
+                    # scale['f_x'] = scale['f_x'] * 2
+                    # scale['f_y'] = scale['f_y'] * 2
 
                     hmsIn = outputs_2d[i]
                     # if the first pair is [1, 0], uncomment the code below
                     # hmsIn[cfg.DATASET.KEYPOINT.NUM:cfg.DATASET.KEYPOINT.NUM+2] *= -1
                     # outputs_3d[i, 0]n *= -1
+                    # generate the campus and shelf data
+
                     hmsIn[:cfg.DATASET.KEYPOINT.NUM] /= 255
                     hmsIn[cfg.DATASET.KEYPOINT.NUM:] /= 127
                     rDepth = outputs_rd[i][0]
@@ -164,8 +169,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                         pred_bodys_2d[:, :, :2] *= cfg.dataset.STRIDE  # resize poses to the input-net shape 4
                         pred_bodys_2d = pred_bodys_2d.numpy()
 
-                    pafs_3d = outputs_3d[i].numpy().transpose(1, 2, 0)
-                    root_d = outputs_rd[i][0].numpy() # changed cm to m
+                    pafs_3d = outputs_3d[i].numpy().transpose(1, 2, 0) / 100
+                    root_d = outputs_rd[i][0].numpy() / 100 # changed cm to m
 
                     paf_3d_upsamp = cv2.resize(
                         pafs_3d, (cfg.INPUT_SHAPE[1], cfg.INPUT_SHAPE[0]), interpolation=cv2.INTER_NEAREST) # get the rela depth map
@@ -185,6 +190,14 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                                                                     device=device, root_n=cfg.DATASET.ROOT_IDX)
                     else:
                         new_pred_bodys_3d = pred_bodys_3d
+
+                    # save the adjust_2d and joints_gt
+                    pair = dict()
+                    pair['pred'] = adjust_2d
+                    pair['gt_global'] = joints3d_global[i,...]
+                    pair['gt_local'] = gt_bodys
+                    pair['img_path'] = scale['img_paths'][idx_v]
+                    result['3d_pairs'].append(pair)
 
                     # if cfg.TEST_MODE == "generate_train":
                     #     save_result_for_train_refine(pred_bodys_2d, new_pred_bodys_3d, gt_bodys, pred_rdepths, result)
@@ -207,17 +220,19 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     # aligned_pose = PA(gt_global3d, global_pose3d)
 
 
-                    if idx % 500 == 0:
-                        joint_folder = os.path.join(output_dir,'joints_folder')
-                        os.makedirs(joint_folder, exist_ok=True)
-                        vis_joints3d(imgs[i], new_pred_bodys_3d, gt_3d, joint_folder, idx, i, idx_v, total_iter = total_iter)
+                    # if idx % 500 == 0:
+                    # joint_folder = os.path.join(output_dir,'joints_folder')
+                    # os.makedirs(joint_folder, exist_ok=True)
+                    # vis_joints3d(imgs[i], new_pred_bodys_3d, gt_3d, joint_folder, idx, i, idx_v, total_iter = total_iter)
+
                         # vis_joints3d(imgs[i], aligned_pose, gt_global3d, joint_folder, idx, i, idx_v, total_iter = total_iter)
-                    import pdb; pdb.set_trace()
+                    # import pdb; pdb.set_trace()
                     # img_paths = scale['img_paths'][idx_v]
                     # save_result(pred_bodys_2d, new_pred_bodys_3d, global_pose3d, aligned_pose, gt_bodys, gt_global3d, pred_rdepths, img_paths,result) #img_path[i],
                 
-                if idx % 500 == 0:
-                    vis_2d(hmsIn, imgs[i], root_d_upsamp,output_dir,idx, idx_v, total_iter = total_iter)
+                
+                # if idx % 500 == 0:
+                #     vis_2d(hmsIn, imgs[i], root_d_upsamp,output_dir,idx, idx_v, total_iter = total_iter)
 
 
 
@@ -229,6 +244,10 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     #     json.dump(result, f)
     # logger.info("Pairs writed to {}".format(pair_file_name))
 
+    file_name = os.path.join(cfg.TEST.ROOT_PATH,'shelf_result.pkl')
+    with open(file_name,'wb') as f:
+        pickle.dump(result, f)
+    print(f'save result into {file_name}')
     
     msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'
     logger.info(msg)

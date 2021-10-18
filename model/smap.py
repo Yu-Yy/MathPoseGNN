@@ -418,8 +418,8 @@ class SMAP(nn.Module):
             outputs['root_d'].append(res_rd)
             outputs['feature'].append(raw_feature)
 
+        outputs_2d = (outputs['heatmap_2d'][-1][-1] + outputs['heatmap_2d'][-1][-2] + outputs['heatmap_2d'][-1][-3]) # 不同尺度的求和相加？
         if valids is None and labels is None:
-            outputs_2d = (outputs['heatmap_2d'][-1][-1] + outputs['heatmap_2d'][-1][-2] + outputs['heatmap_2d'][-1][-3]) # 不同尺度的求和相加？
             return outputs_2d, outputs['det_d'][-1][-1], outputs['root_d'][-1][-1], outputs['feature'][-1]
         else:
-            return self._calculate_loss(outputs, valids, labels, rdepth), outputs
+            return self._calculate_loss(outputs, valids, labels, rdepth), outputs_2d, outputs['det_d'][-1][-1], outputs['root_d'][-1][-1], outputs['feature'][-1]

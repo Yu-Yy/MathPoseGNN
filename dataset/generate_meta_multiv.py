@@ -32,7 +32,7 @@ TRAIN_LIST = [
 ]
 VAL_LIST = ['160906_pizza1', '160422_haggling1', '160906_ian5', '160906_band4']
 
-CAMERA_NUMBER = (3,6,12,13,23)
+# CAMERA_NUMBER = (3,6,12,13,23)
 
 CONNS =  [[0, 1],
          [0, 2],
@@ -68,12 +68,12 @@ class Panoptic_Depth:
         self.paf_num = len(CONNS)
 
         # self.sigma = 4 #cfg.NETWORK.SIGMA
-        self.single_size = 512*424
+        # self.single_size = 512*424
         self.istrain = is_train
         if is_train:
             self.scene_list = TRAIN_LIST
         else:
-            self.scene_list = VAL_LIST
+            self.scene_list = TRAIN_LIST # TODO: for gnn VAL_LIST
         # 读取k_calibration, ksync, 以depth 为准对齐一次即可
         self.scene_num = len(self.scene_list)
 
@@ -214,9 +214,9 @@ class Panoptic_Depth:
             meta['root'].append(per_info_media)
             
         if self.istrain:
-            writen_file = osp.join(self.image_folder,'cmu_data_train_multi.pkl')   
+            writen_file = osp.join(self.image_folder,'cmu_data_train_new5_multi.pkl')   
         else:
-            writen_file = osp.join(self.image_folder,'cmu_data_test_multi.pkl')
+            writen_file = osp.join(self.image_folder,'cmu_data_gnn_final_multi.pkl')
         
         with open(writen_file,'wb') as f:
             pickle.dump(meta, f)
@@ -263,11 +263,12 @@ class Panoptic_Depth:
 if __name__ == '__main__':
     img_path = '/Extra/panzhiyu/CMU_data/'
     kp_path = '/Extra/panzhiyu/CMU_data/'
-    view_set = [3,6,12,13,23]
+    # view_set = [3,6,12,13,23]
+    view_set = [1,5,7,15,20]
 
-    depth_data_train = Panoptic_Depth(img_path, kp_path, view_set,is_train = True)
-    depth_data_test = Panoptic_Depth(img_path, kp_path, view_set,is_train = False)
+    depth_data_train = Panoptic_Depth(img_path, kp_path, view_set,is_train = False)
+    # depth_data_test = Panoptic_Depth(img_path, kp_path, view_set,is_train = False)
     depth_data_train.__generate_meta__()
-    depth_data_test.__generate_meta__()
+    # depth_data_test.__generate_meta__()
 
 

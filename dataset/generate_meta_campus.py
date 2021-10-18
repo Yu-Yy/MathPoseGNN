@@ -19,6 +19,7 @@ import glob
 import scipy.io as scio
 from tqdm import tqdm
 
+# train the campus
 
 file = '/Extra/panzhiyu/CampusSeq1/calibration_campus.json'
 # kpdata = scio.loadmat(file)
@@ -62,18 +63,15 @@ Related = [14,13,12,6,7,8,11,10,9,3,4,5,0,1]
 
 # '/Extra/panzhiyu/CMU_data/'
 class Campus_Depth:
-    def __init__(self, image_folder, view_set): # TODO add keypoint foldercfg,
+    def __init__(self, image_folder, view_set, istrain = True): # TODO add keypoint foldercfg,
         self.view_set = view_set
         # self.cam_list = [(0,x) for x in self.view_set] # get the HD images
         self.view_num = len(self.view_set)
         self.image_folder = image_folder
         # self.transform = transform
         self.conns = CONNS
-        self.image_size = np.array([360,288]) # 
-        # self.input_size = cfg.dataset.input_size 
-        # self.input_size = np.array([960,512])
-        # self.heatmap_size = self.input_size / 2
-        # self.heatmap_size = self.heatmap_size.astype(np.int16)
+        # self.image_size = np.array([360,288]) # Campus
+        self.image_size = np.array([1032,776]) # Shelf
 
         self.num_joints = 15 #cfg.NETWORK.NUM_JOINTS
         self.paf_num = len(CONNS)
@@ -102,15 +100,21 @@ class Campus_Depth:
 
         self.kpdata = scio.loadmat(self.kpfile)
         self.kp3d = self.kpdata['actor3D'][0] # it has max people 3  
-        self.dataset_len = 2000 # totally 2000 frames
+        self.dataset_len = len(self.kp3d[0]) # totally 2000 frames
 
+        tris_list = list(range(self.dataset_len))
+
+        # not used
+        test_list = list(range(350,471))
+        test_list.extend(list(range(650,751)))
         # get the camera parameters
         self.camera_parameters = (self._get_cam())
         
-        self.max_people = 3
+        self.max_people = 4 # campus 3 shelf 4
 
     def _get_cam(self):
-        cam_file = osp.join(self.image_folder, 'calibration_campus.json') 
+        # cam_file = osp.join(self.image_folder, 'calibration_campus.json') # campus
+        cam_file = osp.join(self.image_folder, 'calibration_shelf.json') # shelf
         with open(cam_file) as cfile:
             calib = json.load(cfile)
 
@@ -138,7 +142,7 @@ class Campus_Depth:
 
 
     def __len__(self):
-        return int(np.sum(self.num_pers))
+        return int(np.sum(self.num_pers)) # useless
 
     def __generate_meta__(self): 
         meta = dict()
@@ -169,7 +173,7 @@ class Campus_Depth:
                 per_info = dict()
                 per_info['img_height'] = int(self.image_size[1])
                 per_info['img_width'] = int(self.image_size[0])
-                per_info['dataset'] = 'CAMP' # for campus
+                per_info['dataset'] = 'SHELF' # for campus
                 per_info['isValidation'] = 1
                 
                 # judge the 2D valid?
@@ -178,6 +182,8 @@ class Campus_Depth:
                 R = view_para['R']
                 T = view_para['t']
                 Kd = view_para['distCoef']
+                # D = np.concatenate([R,T],axis=-1)
+                # P = K @ D
                 pose_info = []
                 pose_3d = []
                 for n in range(self.max_people):
@@ -190,6 +196,7 @@ class Campus_Depth:
                     mid_hip = np.mean(np.concatenate([extracted_pose[2:3,:],extracted_pose[3:4,:]],axis=0),axis=0)
                     pose3d[2,:] = mid_hip
                     pose3d[Related,:] = extracted_pose
+
                     pose2d, depth_val, points_3d_cam, fx, fy, cx, cy = self.__projectjointsPoints__(pose3d.transpose(),K, R, T, Kd)
                     x_check = np.bitwise_and(pose2d[:, 0] >= 0, 
                                                 pose2d[:, 0] <= self.image_size[0] - 1) #(15,) bool
@@ -197,7 +204,7 @@ class Campus_Depth:
                                                 pose2d[:, 1] <= self.image_size[1] - 1)
                     check = np.bitwise_and(x_check, y_check)
                     valid_flag = np.sum(check)
-                    if valid_flag < 3: # it do not has person in this view
+                    if valid_flag < 3: # consider it do not has person in this view
                         continue
                     anno_vis = 2 * np.ones(15)
                     anno_vis[np.logical_not(check)] = 0
@@ -212,12 +219,13 @@ class Campus_Depth:
                 pose_3d = np.concatenate(pose_3d, axis=0)
                 per_info['bodys_3d'] = pose_3d
                 per_info['bodys'] = pose_info
-                per_info['img_paths'] = osp.join(self.image_folder, f'Camera{cam}',f'campus4-c{cam}-{index:0>5d}.png')
+                # per_info['img_paths'] = osp.join(self.image_folder, f'Camera{cam}',f'campus4-c{cam}-{index:0>5d}.png')
+                per_info['img_paths'] = osp.join(self.image_folder, f'Camera{cam}',f'img_{index:0>6d}.png')
                 # meta['root'].append(per_info)
                 per_info['cam'] = view_para
                 per_info_media[cam] = per_info
             
-            if len(per_info_media) < 3: # 3 views
+            if len(per_info_media) < 5: # 3 views for campus and 5 views for shelf
                 continue
             meta['root'].append(per_info_media)
 
@@ -259,7 +267,7 @@ class Campus_Depth:
         # if self.istrain:
             # writen_file = osp.join(self.image_folder,'cmu_data_train.pkl')   
         # else:
-        writen_file = osp.join(self.image_folder,'campus_meta_multi.pkl')
+        writen_file = osp.join(self.image_folder,'shelf_meta_multi.pkl')
         
         with open(writen_file,'wb') as f:
             pickle.dump(meta, f)
@@ -304,8 +312,9 @@ class Campus_Depth:
     
 
 if __name__ == '__main__':
-    img_path = '/Extra/panzhiyu/CampusSeq1/'
-    view_set = [0,1,2]
+    # img_path = '/Extra/panzhiyu/CampusSeq1/'
+    img_path = '/Extra/panzhiyu/Shelf/'
+    view_set = [0,1,2,3,4]
 
     depth_data_train = Campus_Depth(img_path, view_set)
     # depth_data_test = Campus_Depth(img_path,view_set)

@@ -10,12 +10,12 @@ import os.path as osp
 import torch
 import pickle
 from torch.utils.data import Dataset
-
+from exps.stage3_root2.config import cfg
 from dataset.ImageAugmentation import (aug_croppad, aug_flip, aug_rotate, aug_scale)
 from dataset.representation import generate_heatmap, generate_paf, generate_rdepth
 
 
-cam_nodes = [(0,3),(0,6),(0,12),(0,13),(0,23)] # TODO: campus
+cam_nodes = cfg.DATASET.CAM #[(0,3),(0,6),(0,12),(0,13),(0,23)] # TODO: campus
 # cam_nodes = [0,1,2]
 
 class JointDataset(Dataset):
@@ -57,10 +57,10 @@ class JointDataset(Dataset):
                 data_this = pickle.load(data_file)
                 data = data_this['root']
         # different index may have different viewsW
-
-
         for i in range(len(data)): # transverse the whole image  # TODO: For campus demo
             # transverse all the views
+            # self.val_data.append(data[i]) # TODO: for run the result of shelf 
+            self.val_data.append(data[i]) # for gnn train
             if data[i][cam_nodes[0]]['isValidation'] != 0:
                 self.val_data.append(data[i])
             else:
@@ -145,7 +145,7 @@ class JointDataset(Dataset):
             data = copy.deepcopy(self.train_data[index])
         else:
             data = copy.deepcopy(self.val_data[index])
-
+        
         # generate the meta data
         meta_data_multi = self.get_anno(data)
         # current_views = list(meta_data_multi.keys())
@@ -180,6 +180,7 @@ class JointDataset(Dataset):
             joints3d_local.append(bodys[None,...])
             
             # read in the image
+            # import pdb; pdb.set_trace()
             img = cv2.imread(osp.join(root_path,meta_data['img_paths']), cv2.IMREAD_COLOR) # TODO: campus 
             img_paths.append(meta_data['img_paths'])
 
@@ -217,35 +218,36 @@ class JointDataset(Dataset):
                 # relative depth
                 valid[self.keypoint_num + self.paf_num*2:, 0] = 0
 
-            labels_num = len(self.gaussian_kernels) # labels_num is the person's number?
-            labels = np.zeros((labels_num, self.keypoint_num + self.paf_num*3, *self.output_shape))  # TODO: The use of different guassian kernel
-            for i in range(labels_num): # 不同 kernel size 下
-                # heatmaps
-                labels[i][:self.keypoint_num] = generate_heatmap(meta_data['bodys'], self.output_shape, self.stride, \
-                                                                self.keypoint_num, kernel=self.gaussian_kernels[i])  # heatmap channel
-                # pafs + relative depth
-                labels[i][self.keypoint_num:] = generate_paf(meta_data['bodys'], self.output_shape, self.params_transform, \
-                                                            self.paf_num, self.paf_vector, max(1, (3-i))*self.paf_thre, self.with_mds)
-            
-            # root depth
-            labels_rdepth = generate_rdepth(meta_data, self.stride, self.root_idx, self.max_people)
-            labels = torch.from_numpy(labels).float()
-            labels_rdepth = torch.from_numpy(labels_rdepth).float()
-            valid = torch.from_numpy(valid).float()
+
+            if self.stage in ['train', 'generation']: # train then generate
+                labels_num = len(self.gaussian_kernels) # labels_num is the person's number?
+                labels = np.zeros((labels_num, self.keypoint_num + self.paf_num*3, *self.output_shape))  # TODO: The use of different guassian kernel
+                for i in range(labels_num): # 不同 kernel size 下
+                    # heatmaps
+                    labels[i][:self.keypoint_num] = generate_heatmap(meta_data['bodys'], self.output_shape, self.stride, \
+                                                                    self.keypoint_num, kernel=self.gaussian_kernels[i])  # heatmap channel
+                    # pafs + relative depth
+                    labels[i][self.keypoint_num:] = generate_paf(meta_data['bodys'], self.output_shape, self.params_transform, \
+                                                                self.paf_num, self.paf_vector, max(1, (3-i))*self.paf_thre, self.with_mds)
+                
+                # root depth
+                labels_rdepth = generate_rdepth(meta_data, self.stride, self.root_idx, self.max_people)
+                labels = torch.from_numpy(labels).float()
+                labels_rdepth = torch.from_numpy(labels_rdepth).float()
+                valid = torch.from_numpy(valid).float()
+                valid_mul.append(valid[None,...])
+                labels_mul.append(labels[None,...])
+                labels_rdepth_mul.append(labels_rdepth[None,...])
+
             
             scale_mul.append(meta_data['scale']) # different scale
             img_mul.append(img[None,...])
-            valid_mul.append(valid[None,...])
-            labels_mul.append(labels[None,...])
-            labels_rdepth_mul.append(labels_rdepth[None,...])
+            
 
         img_mul = torch.cat(img_mul, dim=0)
-        valid_mul = torch.cat(valid_mul,dim=0)
-        labels_mul = torch.cat(labels_mul,dim=0)
-        labels_rdepth_mul = torch.cat(labels_rdepth_mul,dim = 0)
         joints3d_local = np.concatenate(joints3d_local, axis=0)
         joints3d_local = torch.from_numpy(joints3d_local)
-        
+
         if self.stage in ['test', 'generation']:
             # bodys = np.zeros((self.max_people, self.keypoint_num, len(meta_data['bodys'][0][0])), np.float)
             # bodys[:len(meta_data['bodys'])] = np.asarray(meta_data['bodys'])
@@ -258,7 +260,10 @@ class JointDataset(Dataset):
                                                                     'net_width': self.params_transform['crop_size_x'],
                                                                     'net_height': self.params_transform['crop_size_y']}
 
-
+        valid_mul = torch.cat(valid_mul,dim=0)
+        labels_mul = torch.cat(labels_mul,dim=0)
+        labels_rdepth_mul = torch.cat(labels_rdepth_mul,dim = 0)
+        
         return img_mul, valid_mul, labels_mul, \
             labels_rdepth_mul, cam_parameters_multi, joints3d_align, joints3d_local ,{'scale': scale_mul, 
                                                                     'nposes': nposes,

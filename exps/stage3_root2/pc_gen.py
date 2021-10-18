@@ -19,6 +19,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 from cvpack.utils.logger import get_logger
 from model.smap import SMAP
+from model.pose2d_gnn import Pose_GCN
 from model.refinenet import RefineNet
 from lib.utils.dataloader import get_test_loader
 from lib.utils.comm import is_main_process
@@ -102,16 +103,14 @@ unified_bones_def14 = [
     [11, 12], [12, 13],  # right leg
 ]
 
-File_Name = '/Extra/panzhiyu/CMU_data/keypoints_validation_results.json'
 
+File_Name = '/Extra/panzhiyu/CMU_data/keypoints_validation_results.json'
 OFF_FILE = '/home/panzhiyu/project/3d_pose/SMAP/keypoints_validation_results.pkl'
 
-
+save_dir = '/Extra/panzhiyu/CMU_data/gnn_test/'
 
 with open(OFF_FILE,'rb') as f:
     pred_2d_results = pickle.load(f)
-
-
 
 def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, device, 
                             output_dir='', total_iter='infer'):
@@ -119,6 +118,9 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     model.eval()
     if refine_model is not None:
         refine_model.eval()
+
+    gnn_net = GNN_RefinedNet(layers_num = 4 ,out_ch = 64, device = device, max_people = cfg.DATASET.MAX_PEOPLE)
+    gnn_net = gnn_net.to(device)
     result = dict()
     result['model_pattern'] = cfg.DATASET.NAME
     result['3d_pairs'] = []
@@ -128,6 +130,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     #                         'image_path': relative image path}
 
     data = tqdm(data_loader) if is_main_process() else data_loader
+
+    max_people = 10
     # create the val dict
     kp_set = [AverageMeter() for _ in range(cfg.DATASET.KEYPOINT.NUM)]
     registor = AverageMeter()
@@ -142,6 +146,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     # test = torch.rand((500,500)).to(device)
     # aa = torch.rand((500,)).to(device)
     # t = test[aa > 0.5]
+    # save_idx = 0 # shut point is 2417
+    save_idx = 21106
     for idx, batch in enumerate(data):
         # if cfg.TEST_MODE == 'run_inference':
         #     imgs, img_path, scales = batch
@@ -151,25 +157,23 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
         # debug_count = 0
         imgs_mul, cam_paras, joints3d_global, joints3d_local_mul, scales = batch
         imgs_mul = imgs_mul.to(device)
-        # joints3d_global= joints3d_global.to(device)
+        joints3d_global= joints3d_global.to(device)
         batch_size = imgs_mul.shape[0]
         # import pdb; pdb.set_trace()
         # json_file = os.path.join('/Extra/panzhiyu/CMU_data/cam_para.pkl')
         # with open(json_file, 'wb') as f:
         #     pickle.dump(cam_paras[0], f)
 
-        c_image = scales[0]['img_paths'][0].split(root_dir)[-1]
-
-        
-        hm_collect = []
-        cam_c = []
-        pose2d_c = []
-
-        if c_image not in pred_2d_results.keys():
-            continue
-
+        # Select the test set  !!!!
+        # c_image = scales[0]['img_paths'][0].split(root_dir)[-1]
+        # hm_collect = []
+        # cam_c = []
+        # pose2d_c = []
+        # if c_image not in pred_2d_results.keys():
+        #     continue
         cam_info = dict()
-        pose_2d_collect = dict()
+        # pose_2d_collect = dict()
+        pose_2d_collect = [dict() for _ in range(batch_size)]
         smap_feature = dict()
         # Batch = 1 matching
         # try:
@@ -192,10 +196,10 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
         with torch.no_grad():
             # in multiple views
             batch_pc = [[[] for _ in range(batch_size)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
-            indx_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
-            select_2d_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+            indx_match = [[[] for _ in range(batch_size)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+            select_2d_match = [[[] for _ in range(batch_size)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
             # use the view match, tag the view label
-            viewidx_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+            viewidx_match = [[[] for _ in range(batch_size)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
             for idx_v ,node in enumerate(cfg.DATASET.CAM):
                 # process the node into the view int
                 view = list(node)[1]
@@ -271,7 +275,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     rDepth = outputs_rd[i][0]
                     # vis the rDepth
 
-                    hm_collect.append(hmsIn[:cfg.DATASET.KEYPOINT.NUM].clone())
+                    # hm_collect.append(hmsIn[:cfg.DATASET.KEYPOINT.NUM].clone())
 
                     pred_bodys_2d = dapalib.connect(hmsIn, rDepth, cfg.DATASET.ROOT_IDX, distFlag=True) # depth-aware part association lib # 存在预测分数
                     
@@ -350,21 +354,31 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     # if adjust_2d is None:
                     #     continue
 
-                    gt_3d_ex = joints3d_global[i,...] # batch is 1
-                    nposes = torch.sum(gt_3d_ex[:,0,3]>0)
-                    gt_3d = gt_3d_ex[:nposes,...].cpu().numpy()
+                    # save the result
+                    # gt_3d_ex = joints3d_global[i,...] # batch is 1
+                    # nposes = torch.sum(gt_3d_ex[:,0,3]>0)
+                    # gt_3d = gt_3d_ex[:nposes,...].cpu().numpy()
 
-                    pose2d_c.append(gt_bodys[:,:,[0,1,3]])
-                    cam_c.append(cam_p)
+                    # pose2d_c.append(gt_bodys[:,:,[0,1,3]])
+                    # cam_c.append(cam_p)
 
-                    save_result_cmu(pred_bodys_2d, adjust_2d, gt_bodys, gt_3d, scale['img_paths'][idx_v], cam_p, result) # judge the valid and add the feature
+                    # save_result_cmu(pred_bodys_2d, adjust_2d, gt_bodys, gt_3d, scale['img_paths'][idx_v], cam_p, result) # judge the valid and add the feature
+                    
                     # generate_pc(adjust_2d, cam_p, scale, batch_pc, i) # , device the total pointcloud of this frame in k lengt hpointcloud =
                     generate_pc_connection(adjust_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, i, shift_size, root_idx=0) # matching error? adjust_2d
-                    for k, v in cam_p.items():
-                        cam_p[k] = torch.from_numpy(v).to(device).to(torch.float)
-                    cam_info[view] = cam_p # 
-                    pose_2d_collect[view] =torch.from_numpy(pred_bodys_2d[:,:,[0,1,3]]).to(device)
-                    smap_feature[view] = output_feature
+                    pose_2d_collect[i][view] = torch.from_numpy(pred_bodys_2d[:,:,[0,1,3]]).to(device)
+                
+
+                # camera is same through different batch
+                for k, v in cam_p.items():
+                    cam_p[k] = torch.from_numpy(v).to(device).to(torch.float)
+                
+                cam_p['pro'] = cam_p['K'] @ torch.cat([cam_p['R'], cam_p['t']], dim=-1)
+                cam_p['pro_inv'] = torch.pinverse(cam_p['pro'])
+                
+                cam_info[view] = cam_p #
+                
+                # smap_feature[view] = output_feature
 
 
             
@@ -410,14 +424,15 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             # judge if it is the target 
 
             # generate the PC:
+            
             failure_folder = os.path.join(output_dir,'vis_pose3d')
             rgb_folder = os.path.join(output_dir,'vis_rgb')
-            debug_flag = 0
+            # debug_flag = 0
             os.makedirs(failure_folder, exist_ok=True)
             os.makedirs(rgb_folder, exist_ok=True)
             # pred_collect = []
             # mask_collect = []
-            for k in range(cfg.DATASET.KEYPOINT.NUM): # TODO: #cfg.DATASET.KEYPOINT.NUM
+            for k in range(cfg.DATASET.KEYPOINT.NUM): # TODO: can simplified
                 for b in range(batch_size):
                     if len(batch_pc[k][b]) >= 1 : 
                         # batch_pc[k][b] = torch.cat(batch_pc[k][b], dim = 0)
@@ -445,36 +460,66 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                         # nposes = scales[i]['nposes']
                         # val_debug(bak_pred[0,...], joints3d_global[b,:nposes,k,:3], mpjpe_g3d, kp_set_g3d[k])
                     else:
-                        del batch_pc[k][b]
+                        # del batch_pc[k][b] # delete cannot align the result
+                        logger.info('Existing one batch contains no valid points')
                         # print(mpjpe_g3d.val)
-                if len(batch_pc[k]) >= 1:
-                    batch_pc[k] = torch.cat(batch_pc[k], dim=0) # TODO: need the further alignment
-                    indx_match[k] = torch.cat(indx_match[k], dim=0)
-                    select_2d_match[k] = torch.cat(select_2d_match[k],dim=0)
-                    viewidx_match[k] = torch.cat(viewidx_match[k],dim=0)
-                else:
-                    debug_flag = 1
 
+                # if len(batch_pc[k]) >= 1:
+                #     batch_pc[k] = torch.cat(batch_pc[k], dim=0) # TODO: need the further alignment
+                # indx_match[k] = torch.cat(indx_match[k], dim=0)
+                # select_2d_match[k] = torch.cat(select_2d_match[k],dim=0)
+                # viewidx_match[k] = torch.cat(viewidx_match[k],dim=0)
+                # else:
+                #     debug_flag = 1
+                # if len(batch_pc[k]) < 1:
+                #     debug_flag = 1
             # 3D part and get the pose
-            if debug_flag:
-                debug_flag = 0
-                continue
+            # if debug_flag:
+            #     debug_flag = 0
+            #     continue
+            # it cannot do with the batch size because of the mis_alignment
+            pose_2d_related = dict() # all possible views
+            for node in cfg.DATASET.CAM:
+                view = list(node)[1]
+                pose_2d_related[view] = torch.zeros(batch_size, max_people, cfg.DATASET.KEYPOINT.NUM, 7) #
 
-            pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size,cam_info, pose_2d_collect, device, root_idx=0)
-            pred_num = pred_bodys_3d.shape[0]
-            for i in range(pred_num):
-                pred_bodys_3d_e = pred_bodys_3d[i,...]
-                pred_bodys_2d = project_views(pred_bodys_3d_e.to(device), cam_info, scale)
-                # the refinenet
-                gnn_net = GNN_RefinedNet(layers_num = 4 ,out_ch = 64, device = device)
-                gnn_net = gnn_net.to(device)
-                kp_feature, node_feature = gnn_net(pred_bodys_2d, smap_feature)
-                import pdb; pdb.set_trace()
+            pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size,cam_info, pose_2d_collect, pose_2d_related, device, root_idx=0)
+            # current pred_3d is Batch * max_people * kp * 4
+            # pred_num = pred_bodys_3d.shape[0]
+            pred_bodys_3d = pred_bodys_3d.to(device)
+            # find the corresponding matched_gt
+            matched_pred, matched_gt, matched_pred_single = matchgt(pred_bodys_3d, joints3d_global, pose_2d_related)
+            gt_bodys_2d = project_views(matched_gt, cam_info) # combine with the out of view information
+
+            # import pdb; pdb.set_trace()
+            # save matched_single, pred3d, gt 2d and 3d, and one cam_info, divide by batch_size
+            gnn_pair = dict()  # batch 4 pair
+            gnn_pair['pred_single'] = matched_pred_single
+            gnn_pair['pred_3d'] = matched_pred.cpu()
+            gnn_pair['gt_3d'] = matched_gt.cpu()
+            gnn_pair['gt_2d'] = gt_bodys_2d
+            gnn_pair['cam'] = cam_info
+
+            file_name = f'gnn_train_{save_idx:0>5d}.pkl'
+            with open(os.path.join(save_dir,file_name), 'wb') as f:
+                pickle.dump(gnn_pair, f)
+            save_idx += 1
+
+            # # the refinenet
+            # _, refine_res = gnn_net(pred_bodys_2d, smap_feature, cam_info)
+            # refined_pose3d = torch.cat([matched_pred[:,:,:,:3] + refine_res, matched_pred[:,:,:,3:4]], dim = -1)
+            # # caluculate the loss
+            # pred_count = torch.sum( refined_pose3d[:,:,0,3],dim=-1, keepdim=True )
+            # valid_label = refined_pose3d[:,:,:,3:4] * (matched_gt[:,:,:,3:4] > 0.1)
+            # loss_temp = torch.norm((refined_pose3d[:,:,:,:3] - matched_gt[:,:,:,:3]) * valid_label, dim=-1) ** 2
+            # loss_m1 = torch.mean(loss_temp, dim=-1)         
+            # loss_3d = torch.mean(torch.sum(loss_m1 * (1/pred_count), dim = -1))
             
             
-            gt_3d_ex = joints3d_global[0,...] # batch is 1
-            nposes = torch.sum(gt_3d_ex[:,0,3]>0)
-            gt_3d = gt_3d_ex[:nposes,...]
+            
+            
+            # nposes = torch.sum(gt_3d_ex[:,0,3]>0)
+            # gt_3d = gt_3d_ex[:nposes,...]
             # sample_out = dict()
             # sample_out['heatmap'] = hm_collect
             # sample_out['gt_2d'] = pose2d_c
@@ -485,7 +530,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             # with open(output_file , 'wb') as f:
             #     pickle.dump(sample_out, f)
             # gt_3d = gt_3d[:,[0]+panoptic_to_unified,:]
-            vis_label = val_match(pred_bodys_3d,gt_3d,mpjpe)
+
+            # vis_label = val_match(pred_bodys_3d,gt_3d,mpjpe) # validation code
 
             # gt_3d = gt_3d[:,[0]+panoptic_to_unified,:] # for hrnet
             # vis_label_fn = val_fn(pred_bodys_3d, gt_3d, mpjpe, kp_set) # FN
@@ -505,31 +551,31 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             # # file_name = os.path.join(failure_folder, f'vis_f_fp_{idx}.jpg')
             # plt.savefig('gt2d_debug.jpg')
             # import pdb;pdb.set_trace()
-            if vis_label:
-                # plot the rgb
-                fig = plt.figure(figsize=(20, 10))
-                img_c = []
-                for idx_v ,node in enumerate(cfg.DATASET.CAM):
-                    img = imgs_mul[0,idx_v,...].cpu()
-                    img_c.append(tensor2im(img))
-                img_c = np.concatenate(img_c, axis=1)
-                plt.imshow(img_c)
-                rgb_file = os.path.join(rgb_folder, f'vis_f_{idx}.jpg')
-                plt.savefig(rgb_file)
-                fig = plt.figure(figsize=(20, 10))
-                ax1 = fig.add_subplot(111, projection='3d')
-                for ip in range(len(pred_bodys_3d)):
-                    p3d = pred_bodys_3d[ip]
-                    for pair in pairs:#unified_bones_def14
-                        ax1.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
-                for ip in range(len(gt_3d)):
-                    p3d = gt_3d[ip]
-                    for pair in pairs:
-                        ax1.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
-                ax1.view_init(azim=-90, elev=-45)
-                file_name = os.path.join(failure_folder, f'vis_f_{idx}.jpg')
-                plt.savefig(file_name)
-                plt.close(fig)
+            # if vis_label:
+            #     # plot the rgb
+            #     fig = plt.figure(figsize=(20, 10))
+            #     img_c = []
+            #     for idx_v ,node in enumerate(cfg.DATASET.CAM):
+            #         img = imgs_mul[0,idx_v,...].cpu()
+            #         img_c.append(tensor2im(img))
+            #     img_c = np.concatenate(img_c, axis=1)
+            #     plt.imshow(img_c)
+            #     rgb_file = os.path.join(rgb_folder, f'vis_f_{idx}.jpg')
+            #     plt.savefig(rgb_file)
+            #     fig = plt.figure(figsize=(20, 10))
+            #     ax1 = fig.add_subplot(111, projection='3d')
+            #     for ip in range(len(pred_bodys_3d)):
+            #         p3d = pred_bodys_3d[ip]
+            #         for pair in pairs:#unified_bones_def14
+            #             ax1.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
+            #     for ip in range(len(gt_3d)):
+            #         p3d = gt_3d[ip]
+            #         for pair in pairs:
+            #             ax1.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
+            #     ax1.view_init(azim=-90, elev=-45)
+            #     file_name = os.path.join(failure_folder, f'vis_f_{idx}.jpg')
+            #     plt.savefig(file_name)
+            #     plt.close(fig)
             # except:
             #     debug_flag = 0
             #     print('The debug flag is set True')
@@ -630,8 +676,69 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
 
     return mpjpe.avg
 
-def easy_mode(pose_file,cfg, logger, device, 
+def matchgt(pred_3d_batch, gt_3d_batch, pose2d_related):
+    batch_size = pred_3d_batch.shape[0]
+    matched_pred = torch.zeros(pred_3d_batch.shape).to(pred_3d_batch.device)
+    matched_gt = torch.zeros(pred_3d_batch.shape).to(pred_3d_batch.device)
+    matched_pred2d = dict()
+    for v in pose2d_related.keys():
+        matched_pred2d[v] = torch.zeros(pose2d_related[v].shape).to(pose2d_related[v].device)
+
+    for b in range(batch_size):
+        pred_3d_b = pred_3d_batch[b,...]
+        gt_3d = gt_3d_batch[b,...]
+        pred_3d = pred_3d_b[...,:3] # N X K X 3
+        pred_vis = pred_3d_b[...,3]
+        gt_3d_position = gt_3d[...,:3]
+        gt_vis = gt_3d[...,3]
+        mpjpe_save = dict()
+        mpjpe_id = dict()
+        for idx, (pose, pose_vis) in enumerate(zip(pred_3d, pred_vis)):
+            temp_mpjpe = []
+            for (gt, gt_valid) in zip(gt_3d_position, gt_vis):
+                mask1 = (gt_valid > 0)
+                mask2 = (pose_vis > 0)
+                mask = mask1 * mask2
+                if torch.sum(mask) == 0:
+                    temp_mpjpe.append(torch.tensor(550))
+                    continue
+                c_mpjpe = torch.mean(torch.norm((pose[mask,:] - gt[mask,:]), dim=-1))
+                temp_mpjpe.append(c_mpjpe)
+            min_gt = torch.argmin(torch.Tensor(temp_mpjpe))
+            min_mpjpe = torch.min(torch.Tensor(temp_mpjpe))
+            if min_gt.item() in mpjpe_save.keys():
+                if min_mpjpe < mpjpe_save[min_gt.item()]:
+                    mpjpe_save[min_gt.item()] = min_mpjpe
+                    mpjpe_id[min_gt.item()] = idx
+            else:
+                mpjpe_save[min_gt.item()] = min_mpjpe
+                mpjpe_id[min_gt.item()] = idx
+        # error_list = torch.Tensor(list(mpjpe_save.values()))
+        # mask_label = (error_list < threshold)
+        filtered_predid = list(mpjpe_id.values())
+        filtered_pose = pred_3d_b[filtered_predid,...]
+        filtered_gtid = list(mpjpe_id.keys())
+        filtered_gt = gt_3d[filtered_gtid,...]
+        pred_num = len(filtered_predid)
+        matched_pred[b,:pred_num,...] = filtered_pose
+        matched_gt[b,:pred_num,...] = filtered_gt
+        # match the 2d
+        for v, v_pose in pose2d_related.items():
+            filtered_pose2d = v_pose[b,filtered_predid,...]
+            matched_pred2d[v][b,:pred_num,...] = filtered_pose2d
+    
+    return matched_pred, matched_gt, matched_pred2d
+
+
+
+
+        
+
+
+def easy_mode(pose_file, poserefine, cfg, logger, device, 
                             output_dir='', total_iter='infer'):
+    if poserefine is not None:
+        poserefine.eval()
     os.makedirs(output_dir, exist_ok=True)
     # pred_2d_results
     with open(pose_file,'rb') as f:
@@ -689,7 +796,8 @@ def easy_mode(pose_file,cfg, logger, device,
             next_num = next_image.split('/')[-1].replace(next_viewr+'_','')
         
         # process the information
-        pose_2d_collect = dict()
+        # pose_2d_collect = dict()
+        pose_2d_collect = [dict() for _ in range(1)]
         vis_gt_2d_collect = []
         vis_pred_collect = []
         vis_img_path = []
@@ -728,13 +836,12 @@ def easy_mode(pose_file,cfg, logger, device,
             # pose_2d = adjust_2d.copy()
 
             view = int(view.split('_')[-1])
-            pose_2d_collect[view] =torch.from_numpy(pose_2d[:,:,[0,1,3]]).to(device) # (x, y, vis)
+            pose_2d_collect[0][view] =torch.from_numpy(pose_2d[:,:,[0,1,3]]).to(device) # (x, y, vis)
 
             # cam_info.append(cam_p) # for alignment
             vis_gt_2d_collect.append(gt_bodys[:,:,[0,1,3]])
             vis_pred_collect.append(pose_2d[:,:,[0,1,3]])
             vis_img_path.append(image_path)
-            
             generate_pc_connection(pose_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, 0, shift_size, root_idx=0) #adjust_2dcmu_pred_2d
             
             for k, v in cam_p.items():
@@ -742,8 +849,8 @@ def easy_mode(pose_file,cfg, logger, device,
             cam_info[view] = cam_p
 
         
-        failure_3d_folder = os.path.join(output_dir,'vis_pose3d_0910D')
-        failure_2d_folder = os.path.join(output_dir,'vis_pose2d_0910D')
+        failure_3d_folder = os.path.join(output_dir,'vis_pose3d_1009D')
+        failure_2d_folder = os.path.join(output_dir,'vis_pose2d_1009D')
         debug_flag = 0
         os.makedirs(failure_3d_folder, exist_ok=True)
         os.makedirs(failure_2d_folder, exist_ok=True)
@@ -761,16 +868,18 @@ def easy_mode(pose_file,cfg, logger, device,
                     indx_match[k][b] = torch.from_numpy(indx_match[k][b]).to(device) # to_device    
                     viewidx_match[k][b] = np.concatenate(viewidx_match[k][b], axis = -1)
                     viewidx_match[k][b] = torch.from_numpy(viewidx_match[k][b]).to(device)
-                else:
-                    del batch_pc[k][b]
-                    # print(mpjpe_g3d.val)
-            if len(batch_pc[k]) >= 1: # no points in one 
-                batch_pc[k] = torch.cat(batch_pc[k], dim=0) # TODO: need the further alignment
-                select_2d_match[k] = torch.cat(select_2d_match[k],dim=0)
-                indx_match[k] = torch.cat(indx_match[k], dim=0)
-                viewidx_match[k] = torch.cat(viewidx_match[k],dim=0)
-            else:
-                debug_flag = 1 # TODO: 可以稍微放松要求
+            #     else:
+            #         del batch_pc[k][b]
+            #         # print(mpjpe_g3d.val)
+            # if len(batch_pc[k]) >= 1: # no points in one 
+            #     batch_pc[k] = torch.cat(batch_pc[k], dim=0) # TODO: need the further alignment
+            #     select_2d_match[k] = torch.cat(select_2d_match[k],dim=0)
+            #     indx_match[k] = torch.cat(indx_match[k], dim=0)
+            #     viewidx_match[k] = torch.cat(viewidx_match[k],dim=0)
+            # else:
+            #     debug_flag = 1 # TODO: 可以稍微放松要求
+            if len(batch_pc[k]) < 1:
+                debug_flag = 1
         
         # 3D part and get the pose
         # try:
@@ -778,89 +887,116 @@ def easy_mode(pose_file,cfg, logger, device,
             # assert False
             debug_flag = 0
             continue
-        pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size, cam_info, pose_2d_collect, device, root_idx=0) # changed the 
+        
+        pose_2d_related = dict() # all possible views
+        for node in cfg.DATASET.CAM:
+            view = list(node)[1]
+            pose_2d_related[view] = torch.zeros(1, 10, cfg.DATASET.KEYPOINT.NUM, 7) #
+        
+        pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size, cam_info, pose_2d_collect, pose_2d_related, device, root_idx=0) # changed the 
+        for node in cfg.DATASET.CAM:
+            view = list(node)[1]
+            pose_2d_related[view] = pose_2d_related[view].to(device)
+        pred_bodys_3d = pred_bodys_3d.to(device)
+        with torch.no_grad():
+            if poserefine is not None:
+                refine_bodys_3d = poserefine(pose_2d_related, pred_bodys_3d)
+
+        refine_bodys_3d = torch.cat([refine_bodys_3d, pred_bodys_3d[...,3:4]],dim=-1)
+        pred_bodys_3d = pred_bodys_3d[0,...]
+        refine_bodys_3d = refine_bodys_3d[0,...]
+        pred_num = torch.sum(pred_bodys_3d[:,0,3]>0)
+        if pred_num  == 0:
+            continue
+        pred_bodys_3d = pred_bodys_3d[:pred_num,...]
+        refine_bodys_3d = refine_bodys_3d[:pred_num,...]
         gt_3d = torch.from_numpy(gt_joints)  #joints3d_global[0,...] # batch is 1
         # gt_3d = gt_3d[:,[0]+panoptic_to_unified,:]  # It is for hrnet standard
-        vis_label, filtered_pose = val_match(pred_bodys_3d,gt_3d,mpjpe) # output
+        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe) # output
+        _,_ = val_match(refine_bodys_3d.cpu(),gt_3d,mpjpe_refined)
         if np.isnan(np.array(mpjpe.val)):
             import pdb; pdb.set_trace()
-        # refined
-        filtered_pose = filtered_pose.to(device)
-        # pose_2d_collect = list(pose_2d_collect.values())
-        # cam_info = list(cam_info.values())
+
+        # # refined
+        # filtered_pose = filtered_pose.to(device)
+        # pose_2d_collect = pose_2d_collect[0]
+        # # pose_2d_collect = list(pose_2d_collect.values())
+        # # cam_info = list(cam_info.values())
         # refined_3d = optimize_3d(filtered_pose, pose_2d_collect, cam_info, device)    
-        # vis_label, _ = val_match(refined_3d.cpu(),gt_3d,mpjpe_refined)
+        # vis_label, _ = val_match(refined_3d.cpu(),gt_3d,refine_bodys_3d)
+        # if np.isnan(np.array(mpjpe_refined.val)):
+        #     import pdb; pdb.set_trace()
         # refined_3d = refined_3d.detach().cpu().numpy()
-        if vis_label:
-            import pdb; pdb.set_trace()
-            msg =  f'BUG EPOCH {total_iter}: The MPJPE is {mpjpe.val}'  #
-            logger.info(msg)  
-            msg =  f'BUG EPOCH {total_iter}: The MPJPE_opt is {mpjpe_refined.val}'  #
-            logger.info(msg)  
-            # vis_2d_pose
-            fig1 = plt.figure(figsize=(20, 10))
-            fig2 = plt.figure(figsize=(20, 10))
-            views_num = len(vis_pred_collect)
-            for i in range(views_num):
-                ax1 = fig1.add_subplot(3,2,(i+1))
-                pose_2d = vis_pred_collect[i]
-                gt_2d = vis_gt_2d_collect[i]
-                if len(pose_2d) == 0:
-                    continue
-                img = cv2.imread(vis_img_path[i])
-                img = img[...,::-1]
-                ax1.imshow(img)
-                for ip in range(len(pose_2d)):
-                    p3d = pose_2d[ip]
-                    for pair in unified_bones_def14: #unified_bones_def14pairs
-                        if np.all(p3d[pair,2] > 0):
-                            ax1.plot(p3d[pair, 0], p3d[pair, 1], c=colors[ip%len(colors)])
 
-                ax2 = fig2.add_subplot(3,2,(i+1))
-                ax2.imshow(img)
-                for ip in range(len(gt_2d)):
-                    p3d = gt_2d[ip]
-                    for pair in unified_bones_def14: #unified_bones_def14
-                        if np.all(p3d[pair,2] > 0):
-                            ax2.plot(p3d[pair, 0], p3d[pair, 1], c=colors[ip%len(colors)])
+        # if vis_label:
+        #     msg =  f'BUG EPOCH {total_iter}: The MPJPE is {mpjpe.val}'  #
+        #     logger.info(msg)  
+        #     msg =  f'BUG EPOCH {total_iter}: The MPJPE_opt is {mpjpe_refined.val}'  #
+        #     logger.info(msg)  
+        #     # vis_2d_pose
+        #     fig1 = plt.figure(figsize=(20, 10))
+        #     fig2 = plt.figure(figsize=(20, 10))
+        #     views_num = len(vis_pred_collect)
+        #     for i in range(views_num):
+        #         ax1 = fig1.add_subplot(3,2,(i+1))
+        #         pose_2d = vis_pred_collect[i]
+        #         gt_2d = vis_gt_2d_collect[i]
+        #         if len(pose_2d) == 0:
+        #             continue
+        #         img = cv2.imread(vis_img_path[i])
+        #         img = img[...,::-1]
+        #         ax1.imshow(img)
+        #         for ip in range(len(pose_2d)):
+        #             p3d = pose_2d[ip]
+        #             for pair in unified_bones_def14: #unified_bones_def14pairs
+        #                 if np.all(p3d[pair,2] > 0):
+        #                     ax1.plot(p3d[pair, 0], p3d[pair, 1], c=colors[ip%len(colors)])
+
+        #         ax2 = fig2.add_subplot(3,2,(i+1))
+        #         ax2.imshow(img)
+        #         for ip in range(len(gt_2d)):
+        #             p3d = gt_2d[ip]
+        #             for pair in unified_bones_def14: #unified_bones_def14
+        #                 if np.all(p3d[pair,2] > 0):
+        #                     ax2.plot(p3d[pair, 0], p3d[pair, 1], c=colors[ip%len(colors)])
                 
-            # orig pose visualization
-            # fig3 = plt.figure(figsize=(20, 10))
-            # ax3 = fig3.add_subplot(111, projection='3d')
-            # for ip in range(len(refined_3d)): #pred_bodys_3d
-            #     p3d = refined_3d[ip]
-            #     for pair in unified_bones_def14: #unified_bones_def14
-            #         ax3.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
-            # for ip in range(len(gt_3d)):
-            #     p3d = gt_3d[ip]
-            #     for pair in unified_bones_def14:
-            #         ax3.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
-            # ax3.view_init(azim=-90, elev=-45)
+        #     # orig pose visualization
+        #     # fig3 = plt.figure(figsize=(20, 10))
+        #     # ax3 = fig3.add_subplot(111, projection='3d')
+        #     # for ip in range(len(refined_3d)): #pred_bodys_3d
+        #     #     p3d = refined_3d[ip]
+        #     #     for pair in unified_bones_def14: #unified_bones_def14
+        #     #         ax3.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
+        #     # for ip in range(len(gt_3d)):
+        #     #     p3d = gt_3d[ip]
+        #     #     for pair in unified_bones_def14:
+        #     #         ax3.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
+        #     # ax3.view_init(azim=-90, elev=-45)
 
-            fig4 = plt.figure(figsize=(20, 10))
-            ax4 = fig4.add_subplot(111, projection='3d')
-            for ip in range(len(pred_bodys_3d)): #pred_bodys_3d
-                p3d = pred_bodys_3d[ip]
-                for pair in unified_bones_def14: #unified_bones_def14
-                    ax4.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
-            for ip in range(len(gt_3d)):
-                p3d = gt_3d[ip]
-                for pair in unified_bones_def14:
-                    ax4.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
-            ax4.view_init(azim=-90, elev=-45)
+        #     fig4 = plt.figure(figsize=(20, 10))
+        #     ax4 = fig4.add_subplot(111, projection='3d')
+        #     for ip in range(len(pred_bodys_3d)): #pred_bodys_3d
+        #         p3d = pred_bodys_3d[ip]
+        #         for pair in unified_bones_def14: #unified_bones_def14
+        #             ax4.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)], linestyle= ':') # linestyle=':'
+        #     for ip in range(len(gt_3d)):
+        #         p3d = gt_3d[ip]
+        #         for pair in unified_bones_def14:
+        #             ax4.plot(p3d[pair, 0], p3d[pair, 1], p3d[pair, 2], c=colors[ip%len(colors)])
+        #     ax4.view_init(azim=-90, elev=-45)
 
-            file_name = os.path.join(failure_2d_folder, f'vis_p2d_{idx}.jpg')
-            fig1.savefig(file_name)
-            plt.close(fig1)
-            file_name = os.path.join(failure_2d_folder, f'vis_gt2d_{idx}.jpg')
-            fig2.savefig(file_name)
-            plt.close(fig2)
-            # file_name = os.path.join(failure_3d_folder, f'vis_3dopt_{idx}.jpg')
-            # fig3.savefig(file_name)
-            # plt.close(fig3)
-            file_name = os.path.join(failure_3d_folder, f'vis_3dorg_{idx}.jpg')
-            fig4.savefig(file_name)
-            plt.close(fig4)
+        #     file_name = os.path.join(failure_2d_folder, f'vis_p2d_{idx}.jpg')
+        #     fig1.savefig(file_name)
+        #     plt.close(fig1)
+        #     file_name = os.path.join(failure_2d_folder, f'vis_gt2d_{idx}.jpg')
+        #     fig2.savefig(file_name)
+        #     plt.close(fig2)
+        #     # file_name = os.path.join(failure_3d_folder, f'vis_3dopt_{idx}.jpg')
+        #     # fig3.savefig(file_name)
+        #     # plt.close(fig3)
+        #     file_name = os.path.join(failure_3d_folder, f'vis_3dorg_{idx}.jpg')
+        #     fig4.savefig(file_name)
+        #     plt.close(fig4)
 
         idx = idx + 1
         # except:
@@ -872,7 +1008,8 @@ def easy_mode(pose_file,cfg, logger, device,
     msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'  #
     logger.info(msg)  
     msg =  f'EPOCH {total_iter}: The MPJPE_opt is {mpjpe_refined.avg}'  #
-    logger.info(msg)      
+    logger.info(msg) 
+    return  mpjpe_refined.avg
 
 def refine_2dgt(pred_2d, gt2d, threshold=50):
     # gt _2d + pred_depth + pred_visible
@@ -1128,7 +1265,7 @@ def val_fp(pred_3d_total, gt_3d, mpjpe, kp_set, threshold=500): # mainly FP
                 vis_label = 1
         registor.reset()
     return vis_label
-        
+
 def val_fn(pred_3d_total, gt_3d, mpjpe, kp_set, threshold=500): # FN
     pred_3d = pred_3d_total[...,:3]
     pred_vis = pred_3d_total[...,3]
@@ -1163,7 +1300,8 @@ def val_fn(pred_3d_total, gt_3d, mpjpe, kp_set, threshold=500): # FN
         registor.reset()
     return vis_label    
 
-def val_match(pred_3d_total, gt_3d, mpjpe, threshold=500): # FN
+
+def val_match(pred_3d_total, gt_3d, mpjpe, threshold=50): # FN
     # need to put in the CPU eval
     pred_3d = pred_3d_total[...,:3] # N X K X 3
     pred_vis = pred_3d_total[...,3] # N X K
@@ -1201,7 +1339,10 @@ def val_match(pred_3d_total, gt_3d, mpjpe, threshold=500): # FN
     error = torch.mean(error_list[mask_label])
     # if torch.isnan(error):
     #     import pdb; pdb.set_trace() # check out one
-    mpjpe.update(error.item())
+    if torch.isnan(error):
+        mpjpe.update(500) # using 500 instead
+    else:
+        mpjpe.update(error.item())
     filtered_pose = pred_3d_total[filtered_id,...]
     filtered_pose = filtered_pose[mask_label,...]
     return vis_label, filtered_pose
@@ -1263,6 +1404,7 @@ def vis_2d(hmsIn_collect, img, folder_name, idx, idx_v, total_iter = 0): # root_
         #     colored_bool = cv2.applyColorMap(vis_paf, cv2.COLORMAP_JET)
         #     image_fusing = vis_pic * 0.3 + colored_bool * 0.7
         #     cv2.imwrite(os.path.join(paf_folder, f'paf_iter_{total_iter}_i_{idx}_v_{idx_v}_paf_{con_idx}.jpg'), image_fusing)    
+
 
 def tensor2im(input_image, imtype=np.uint8):
     """"将tensor的数据类型转成numpy类型，并反归一化.
@@ -1329,8 +1471,14 @@ def main():
 
     device = torch.device(cfg.MODEL.DEVICE)
     if args.test_mode == "off_the_shelf":
+        poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1014GNN/stage3_root2/iter-last.pth'
+        poserefine = Pose_GCN()
+        poserefine.to(device) 
+        state_dict = torch.load(poserefine_file, map_location=lambda storage, loc: storage)
+        state_dict = state_dict['model']
+        poserefine.load_state_dict(state_dict)
         pose_file = os.path.join('/home/panzhiyu/project/3d_pose/SMAP/model_logs_0821/stage3_root2/validation_result/','stage3_root2_generate_result_test_orig.pkl')
-        easy_mode(pose_file, cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
+        easy_mode(pose_file, poserefine ,cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
     else:
         model = SMAP(cfg, run_efficient=cfg.RUN_EFFICIENT)
 
