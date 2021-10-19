@@ -107,7 +107,7 @@ unified_bones_def14 = [
 File_Name = '/Extra/panzhiyu/CMU_data/keypoints_validation_results.json'
 OFF_FILE = '/home/panzhiyu/project/3d_pose/SMAP/keypoints_validation_results.pkl'
 
-save_dir = '/Extra/panzhiyu/CMU_data/gnn_test/'
+save_dir = '/Extra/panzhiyu/CMU_data/gnn_train_oldv5/'
 
 with open(OFF_FILE,'rb') as f:
     pred_2d_results = pickle.load(f)
@@ -147,7 +147,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     # aa = torch.rand((500,)).to(device)
     # t = test[aa > 0.5]
     # save_idx = 0 # shut point is 2417
-    save_idx = 21106
+    save_idx = 0
     for idx, batch in enumerate(data):
         # if cfg.TEST_MODE == 'run_inference':
         #     imgs, img_path, scales = batch
@@ -427,7 +427,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             
             failure_folder = os.path.join(output_dir,'vis_pose3d')
             rgb_folder = os.path.join(output_dir,'vis_rgb')
-            # debug_flag = 0
+            debug_flag = 0
             os.makedirs(failure_folder, exist_ok=True)
             os.makedirs(rgb_folder, exist_ok=True)
             # pred_collect = []
@@ -461,6 +461,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                         # val_debug(bak_pred[0,...], joints3d_global[b,:nposes,k,:3], mpjpe_g3d, kp_set_g3d[k])
                     else:
                         # del batch_pc[k][b] # delete cannot align the result
+                        debug_flag = 1
                         logger.info('Existing one batch contains no valid points')
                         # print(mpjpe_g3d.val)
 
@@ -478,6 +479,10 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             #     debug_flag = 0
             #     continue
             # it cannot do with the batch size because of the mis_alignment
+            if debug_flag  == 1:
+                debug_flag = 0
+                continue
+
             pose_2d_related = dict() # all possible views
             for node in cfg.DATASET.CAM:
                 view = list(node)[1]
@@ -491,7 +496,19 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             matched_pred, matched_gt, matched_pred_single = matchgt(pred_bodys_3d, joints3d_global, pose_2d_related)
             gt_bodys_2d = project_views(matched_gt, cam_info) # combine with the out of view information
 
-            # import pdb; pdb.set_trace()
+            # for b in range(batch_size):
+            #     matched_pred_b = matched_pred[b,...]
+            #     pred_num = torch.sum(matched_pred_b[:,0,3]>0)
+            #     matched_pred_b = matched_pred_b[:pred_num,]
+            #     matched_gt_b = matched_gt[b,...]
+            #     gt_num  = torch.sum(matched_gt_b[:,0,3]>0)
+            #     matched_gt_b = matched_gt_b[:gt_num,...]
+            #     val_match(matched_pred_b,matched_gt_b,mpjpe_g3d)
+            # if mpjpe_g3d.avg > 100:
+            #     mpjpe_g3d.reset()
+            # import pdb;pdb.set_trace()
+            # print('aaa')
+
             # save matched_single, pred3d, gt 2d and 3d, and one cam_info, divide by batch_size
             gnn_pair = dict()  # batch 4 pair
             gnn_pair['pred_single'] = matched_pred_single
@@ -499,6 +516,10 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             gnn_pair['gt_3d'] = matched_gt.cpu()
             gnn_pair['gt_2d'] = gt_bodys_2d
             gnn_pair['cam'] = cam_info
+            for k in gnn_pair['gt_2d'].keys():
+                gnn_pair['gt_2d'][k] = gnn_pair['gt_2d'][k].cpu()
+                for n_k in gnn_pair['cam'][k].keys():
+                    gnn_pair['cam'][k][n_k] = gnn_pair['cam'][k][n_k].cpu()
 
             file_name = f'gnn_train_{save_idx:0>5d}.pkl'
             with open(os.path.join(save_dir,file_name), 'wb') as f:
@@ -900,7 +921,7 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
         pred_bodys_3d = pred_bodys_3d.to(device)
         with torch.no_grad():
             if poserefine is not None:
-                refine_bodys_3d = poserefine(pose_2d_related, pred_bodys_3d)
+                refine_bodys_3d, _ = poserefine(pose_2d_related, pred_bodys_3d)
 
         refine_bodys_3d = torch.cat([refine_bodys_3d, pred_bodys_3d[...,3:4]],dim=-1)
         pred_bodys_3d = pred_bodys_3d[0,...]
@@ -916,6 +937,7 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
         _,_ = val_match(refine_bodys_3d.cpu(),gt_3d,mpjpe_refined)
         if np.isnan(np.array(mpjpe.val)):
             import pdb; pdb.set_trace()
+
 
         # # refined
         # filtered_pose = filtered_pose.to(device)
@@ -1471,7 +1493,7 @@ def main():
 
     device = torch.device(cfg.MODEL.DEVICE)
     if args.test_mode == "off_the_shelf":
-        poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1014GNN/stage3_root2/iter-last.pth'
+        poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1019res/stage3_root2/iter-last.pth'
         poserefine = Pose_GCN()
         poserefine.to(device) 
         state_dict = torch.load(poserefine_file, map_location=lambda storage, loc: storage)

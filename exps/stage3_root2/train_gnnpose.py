@@ -79,7 +79,7 @@ def main():
         #         # logger.info(f'load the pretrained model from {cfg.MODEL.WEIGHT}') 
         #         model.preload(cfg.MODEL.WEIGHT) # just load the SMAP part .module.module.
 
-        data_dir = '/Extra/panzhiyu/CMU_data/gnn_train3'
+        data_dir = '/Extra/panzhiyu/CMU_data/gnn_train4' # same dataset
         train_data_loader = get_traingnn_loader(cfg, num_gpu=num_gpu, data_dir=data_dir, is_dist=engine.distributed) # 图片增强， MDS true
         # vali_data_loader = get_test_loader(cfg, num_gpu=num_gpu, local_rank=0, stage='test') # TODO : temp comment
 
@@ -101,7 +101,6 @@ def main():
         # import pdb;pdb.set_trace() 不设置epoch概念
         # epoch = 1
         best_mpjpe = 10000
-
         for iteration, (matched_pred_single, matched_pred3d, gt_3d, gt_bodys_2d, cam_info) in enumerate(
                 train_data_loader, engine.state.iteration):
             iteration = iteration + 1
@@ -115,24 +114,42 @@ def main():
             
             matched_pred3d = matched_pred3d.to(device)
             matched_pred3d = matched_pred3d.reshape(-1,cfg.DATASET.MAX_PEOPLE, cfg.DATASET.KEYPOINT.NUM,4)
+            # delete the batch 1 sample
+            current_batch = matched_pred3d.shape[0]
+            if current_batch <= 1:
+                continue
             gt_3d = gt_3d.to(device)
             gt_3d = gt_3d.reshape(-1,cfg.DATASET.MAX_PEOPLE, cfg.DATASET.KEYPOINT.NUM,4)
-            final_pred3d = model(matched_pred_single, matched_pred3d)
+            pos_test = (matched_pred3d > 1000)
+            neg_test = (matched_pred3d < -1000)
+            nan_test = torch.isnan(matched_pred3d)
+            valid_check  = torch.cat([pos_test.unsqueeze(-1),neg_test.unsqueeze(-1),nan_test.unsqueeze(-1)], dim=-1)
+            valid_check = torch.any(valid_check, dim = -1) 
+            valid_check = torch.any(valid_check, dim = -1) 
+            valid_re = valid_check.view(-1)
+            matched_pred3d_re = matched_pred3d.view(-1,4)
+            matched_pred3d_re[valid_re,:] = 0 # all set to 0
+            com_3d = matched_pred3d.detach().clone()
+            final_pred3d, residue_loss = model(matched_pred_single, matched_pred3d)
             final_pred3d = torch.cat([final_pred3d, matched_pred3d[...,3:4]], dim=-1)
             # project and get the pred2d
             final_pred2d = project_views(final_pred3d, cam_info)
-            
             # # loss_3d part 
             gt_3d_vis = (gt_3d[...,3] > 0) 
-            temp_loss_3d =  torch.norm(final_pred3d[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * gt_3d_vis
+            orig_3d_valid = (com_3d[...,3] > 0)
+            temp_loss_3d =  torch.norm(final_pred3d[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * (gt_3d_vis * orig_3d_valid)
             valid_people = torch.sum(temp_loss_3d > 0 )
             loss_3d = torch.sum(temp_loss_3d) / valid_people
+
+            temp_comp_3d = torch.norm(com_3d[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * (gt_3d_vis * orig_3d_valid)
+            # valid_3d_people = torch.sum(temp_comp_3d > 0 )
+            comp_3d = torch.sum(temp_comp_3d) / valid_people
 
             temp_d_collect = []
             for k in final_pred2d.keys():
                 # final_pred2d_vis = (final_pred2d[k][...,2] > 0)
                 gt_2d_vis = (gt_bodys_2d[k][...,2] > 0.1)
-                temp_loss_2d = torch.norm(final_pred2d[k][...,:2] - gt_bodys_2d[k][...,:2], dim=-1) ** 2 * gt_2d_vis
+                temp_loss_2d = torch.norm(final_pred2d[k][...,:2] - gt_bodys_2d[k][...,:2], dim=-1) ** 2 * gt_2d_vis * orig_3d_valid
                 temp_d_collect.append(temp_loss_2d)
                 # valid_p = torch.sum(temp_loss_2d > 0)
                 # loss_2d = loss_2d + torch.sum(temp_loss_2d) / valid_p
@@ -141,11 +158,13 @@ def main():
             loss_2d = torch.sum(temp_d_collect) / valid_p
 
             loss_2d = loss_2d / len(final_pred2d.keys())
-            losses =  loss_3d  #0.01 * loss_2d + 
+            losses = 0.001 * loss_2d + loss_3d + residue_loss  #
             loss_dict = dict()
             loss_dict['total'] = losses
             loss_dict['2d'] = loss_2d
             loss_dict['3d'] = loss_3d
+            loss_dict['residue'] = residue_loss
+            loss_dict['comp_3d'] = comp_3d
             optimizer.zero_grad()
             losses.backward()
             optimizer.step()
@@ -177,7 +196,7 @@ def main():
 
             if engine.local_rank == 0:
                 if iteration % 20 == 0 or iteration == max_iter:
-                    log_str = 'Iter:%d, LR(1):%.1e, ' % (
+                    log_str = 'Iter:%d, LR:%.1e, ' % (
                         iteration, optimizer.param_groups[0]["lr"] / num_gpu)
                     for key in loss_dict:
                         tb_writer.add_scalar(

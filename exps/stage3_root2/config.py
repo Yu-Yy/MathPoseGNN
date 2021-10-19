@@ -11,7 +11,7 @@ from cvpack.utils.pyt_utils import ensure_dir
 class Config:
     # -------- Directoy Config -------- #
     ROOT_DIR = '/home/panzhiyu/project/3d_pose/SMAP'  #os.environ['PROJECT_HOME']
-    OUTPUT_DIR = osp.join(ROOT_DIR, 'model_logs_1018_wo2d', osp.split(osp.split(osp.realpath(__file__))[0])[1])
+    OUTPUT_DIR = osp.join(ROOT_DIR, 'model_logs_1019resv2', osp.split(osp.split(osp.realpath(__file__))[0])[1])
     TEST_DIR = osp.join(OUTPUT_DIR, 'log_dir')
     TENSORBOARD_DIR = osp.join(OUTPUT_DIR, 'tb_dir') 
 
@@ -49,8 +49,9 @@ class Config:
 
     # -------- Training Config -------- #
     SOLVER = edict()
+
     SOLVER.IMG_PER_GPU = 128 # 32 for gnn
-    SOLVER.BASE_LR = 1e-4 #2e-4
+    SOLVER.BASE_LR = 5e-5 #2e-4
     SOLVER.CHECKPOINT_PERIOD = 4800
     SOLVER.MAX_ITER = 48000 #96000 # max iteration num
     SOLVER.WEIGHT_DECAY = 8e-6
@@ -64,14 +65,14 @@ class Config:
 
     WITH_MDS = True
     RUN_EFFICIENT = False 
-    Pretrained = True
+    Pretrained = False
     
     # -------- Test Config -------- #
     TEST = edict()
     TEST.IMG_PER_GPU = 3
     TEST.ROOT_PATH = '/Extra/panzhiyu/CMU_data'  #'/Extra/panzhiyu/Shelf' # '/Extra/panzhiyu/CMU_data'## '/Extra/panzhiyu/CMU_data'#  '/Extra/panzhiyu/CampusSeq1'
     TEST.JSON_PATH = osp.join(TEST.ROOT_PATH,'cmu_data_train_multi.pkl') # 'cmu_data_test.pkl' campus_meta_multi.pkl '' cmu_data_train_new5_multi.pkl  cmu_data_test_multi.pkl  cmu_data_gnn_new5temp1_multi.pkl
-    # cmu_data_gnn_final_multi.pkl     cmu_data_test_multi.pkl
+    # cmu_data_gnn_final_multi.pkl     cmu_data_test_multi.pkl 
 
 config = Config()
 cfg = config

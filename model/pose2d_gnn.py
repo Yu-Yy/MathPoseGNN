@@ -130,11 +130,12 @@ class Pose_GCN(nn.Module): # This is the regression module
         init_3d_pos = init_3d[:,:,:,:3] / self.scalar # unit # B X N X K X 3
         init_3d_pos = init_3d_pos.view(-1, cfg.DATASET.KEYPOINT.NUM, 3)  # batch and people fuse into one new batch
         init_3d_valid = init_3d_valid.view(-1)
-        valid_people = (init_3d_valid > 0) #
+        valid_people = (init_3d_valid > 3) #
         # batch_mean = torch.sum(init_3d_pos[valid_people,...] * (1/init_3d_valid[valid_people].unsqueeze(-1).unsqueeze(-1)), dim=-2, keepdim=True) # N, 1, 3
         # set minus the pelvis joints label 
         batch_mean = init_3d_pos[valid_people,2:3,:] # the mid_hip position N,1,3 # 
         init_3d_pos[valid_people,...] = init_3d_pos[valid_people,...] - batch_mean  # N x K x 3
+        origin_pos = init_3d_pos.clone()
         new_batch_size = init_3d_pos.shape[0] # BXm
         view_num = len(pose_single) # valid view num
         batch_edge3d_index = torch.cat([edge_index + x*cfg.DATASET.KEYPOINT.NUM for x in range(new_batch_size)], dim=0).to(self.device) 
@@ -174,6 +175,7 @@ class Pose_GCN(nn.Module): # This is the regression module
         init_3d_weight = init_3d_weight.reshape(-1)
         init_edge_weight = init_3d_weight[batch_edge3d_index[:,0]].float()
         init_3d_pos = torch.cat([init_3d_pos, init_3d_weight.float().unsqueeze(-1)], dim=-1)
+        
         for l in range(len(self.init3d_layers)-1):
             pass_init = self.init_convlayers[l](init_3d_pos, batch_edge3d_index.t().contiguous()) #, init_edge_weight
             bn_init = pass_init.reshape(-1,cfg.DATASET.KEYPOINT.NUM, self.init3d_layers[l+1]).permute(0,2,1)
@@ -196,14 +198,18 @@ class Pose_GCN(nn.Module): # This is the regression module
             bn_final = self.final_bn[l](bn_final)
             ac_final = self.final_ac[l](bn_final)
             final_feature = ac_final.permute(0,2,1).reshape(-1, self.final3d_layers[l+1])
-        
+        if torch.any(torch.isnan(final_feature)):
+            import pdb;pdb.set_trace()
         final_feature = final_feature.reshape(-1, cfg.DATASET.KEYPOINT.NUM, self.final3d_layers[-1])
         final_output = self.output_layer(final_feature) # N x K x 3
-        final_output[valid_people,...] = final_output[valid_people,...] + batch_mean
-        final_output = final_output * self.scalar
-        final_output = final_output.reshape(batch_size, -1, cfg.DATASET.KEYPOINT.NUM, 3)
+        refined_pose = final_output + origin_pos
 
-        return final_output
+        abs_residue = torch.mean(torch.norm(final_output, dim=-1)) # in original metric
+        refined_pose[valid_people,...] = refined_pose[valid_people,...] + batch_mean
+        refined_pose = refined_pose * self.scalar
+        refined_pose = refined_pose.reshape(batch_size, -1, cfg.DATASET.KEYPOINT.NUM, 3)
+
+        return refined_pose, abs_residue
 
 if __name__ == '__main__':
     device = torch.device('cuda')
