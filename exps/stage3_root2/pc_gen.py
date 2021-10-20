@@ -1033,6 +1033,175 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
     logger.info(msg) 
     return  mpjpe_refined.avg
 
+def easy_mode_cross(pose_file, poserefine, cfg, logger, device, 
+                            output_dir='', total_iter='infer'):
+    if poserefine is not None:
+        poserefine.eval()
+    os.makedirs(output_dir, exist_ok=True)
+    # pred_2d_results
+    with open(pose_file,'rb') as f:
+        ready_pose = pickle.load(f)
+
+    view_num = 3
+    cam_file = '/Extra/panzhiyu/CampusSeq1/cam_para.pkl'  # for campus test
+    with open(cam_file, 'rb') as f:
+        cam_para = pickle.load(f)
+
+    init_num = 2000
+    max_length = 0
+    for v in range(view_num):
+        c_frame = list(ready_pose[v].keys())[0]
+        c_len = len(ready_pose[v].keys())
+        if c_len > max_length:
+            max_length = c_len
+        if init_num > c_frame:
+            init_num = c_frame
+
+    shift_size = 3 # shift size is 1
+    scale = dict()
+    scale['img_width'] = 360
+    scale['img_height'] = 288
+    mpjpe = AverageMeter()
+    mpjpe_orig = [AverageMeter() for _ in range(3)]
+
+    for i in tqdm(range(max_length)):
+        current_num = init_num + i
+        per_frame_info = dict()
+        for v in range(view_num):
+            if current_num in ready_pose[v].keys():
+                per_frame_info[v] = ready_pose[v][current_num]
+                gt_joints = np.array(ready_pose[v][current_num]['gt_global'])
+        c_view_num = len(per_frame_info.keys())
+        if c_view_num <= 1: 
+            continue
+        pose_2d_collect = [dict() for _ in range(1)]
+        vis_gt_2d_collect = []
+        vis_pred_collect = []
+        vis_img_path = []
+        cam_info = dict()
+        batch_pc = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+        indx_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+        select_2d_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+        # use the view match, tag the view label
+        viewidx_match = [[[] for _ in range(1)] for _ in range(cfg.DATASET.KEYPOINT.NUM)]
+        for view_idx ,(view, info) in  enumerate(per_frame_info.items()):
+            # get the cam_paras
+            # cam_p = info['cam']
+            cam_p = cam_para[view].copy() 
+            pose_2d = info['pred']  # It is reduced
+            gt_bodys = info['gt_local']
+            image_path = info['img_path']
+            # match the hrnet
+
+            # idx_path = image_path.split(root_path)[-1]
+            # if idx_path in pred_2d_results.keys():
+            #     hrnet_pose = pred_2d_results[idx_path]
+            #     pose_unified = hrnet_pose[:,coco_to_unified,:]
+            #     neck_vis = (pose_unified[:,1:2,2]) * (pose_unified[:,7:8,2])
+            #     pose_neck = (pose_unified[:,1:2,:] + pose_unified[:,7:8,:])/2
+            #     pose_neck[:,:,2] = neck_vis
+            #     pose_14 = np.concatenate([pose_neck, pose_unified], axis=1)
+            #     cmu_pred_2d = pose_2d[:,[0]+panoptic_to_unified,:]
+            #     # process the vis label of hrnet
+            #     adjust_2d = refine_2d_hrnet(cmu_pred_2d, pose_14)
+            #     if lenadjust_2d is None:
+            #         continue
+            #     pose_2d = adjust_2d.copy() # replace the original prediction
+            # else:
+            #     continue
+            
+            # match the gt pred
+
+            # adjust_2d = refine_2dgt(pose_2d, gt_bodys)
+            # if len(adjust_2d) == 0  or adjust_2d is None:
+            #     continue
+            # pose_2d = adjust_2d.copy()
+
+            # view = int(view.split('_')[-1]) # view is already be the number
+            pose_2d_collect[0][view] =torch.from_numpy(pose_2d[:,:,[0,1,3]]).to(device) # (x, y, vis)
+            # cam_info.append(cam_p) # for alignment
+            vis_gt_2d_collect.append(gt_bodys[:,:,[0,1,3]])
+            vis_pred_collect.append(pose_2d[:,:,[0,1,3]])
+            vis_img_path.append(image_path)
+            generate_pc_connection(pose_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, 0, shift_size, root_idx=0) #adjust_2dcmu_pred_2d
+            
+            for k, v in cam_p.items():
+                cam_p[k] = torch.from_numpy(v).to(device).to(torch.float)
+            cam_info[view] = cam_p
+
+        
+        failure_3d_folder = os.path.join(output_dir,'vis_pose3d_1009D')
+        failure_2d_folder = os.path.join(output_dir,'vis_pose2d_1009D')
+        debug_flag = 0
+        os.makedirs(failure_3d_folder, exist_ok=True)
+        os.makedirs(failure_2d_folder, exist_ok=True)
+        # pred_collect = []
+        # mask_collect = []
+        for k in range(cfg.DATASET.KEYPOINT.NUM): # TODO: #cfg.DATASET.KEYPOINT.NUM
+            for b in range(1):
+                if len(batch_pc[k][b]) >= 1 : 
+                    # batch_pc[k][b] = torch.cat(batch_pc[k][b], dim = 0)
+                    batch_pc[k][b] = np.concatenate(batch_pc[k][b], axis = 0)
+                    batch_pc[k][b] = torch.from_numpy(batch_pc[k][b]).to(device).unsqueeze(0)
+                    select_2d_match[k][b] = np.concatenate(select_2d_match[k][b], axis=0)
+                    select_2d_match[k][b] = torch.from_numpy(select_2d_match[k][b]).to(device).unsqueeze(0)
+                    indx_match[k][b] = np.concatenate(indx_match[k][b], axis = -1)
+                    indx_match[k][b] = torch.from_numpy(indx_match[k][b]).to(device) # to_device    
+                    viewidx_match[k][b] = np.concatenate(viewidx_match[k][b], axis = -1)
+                    viewidx_match[k][b] = torch.from_numpy(viewidx_match[k][b]).to(device)
+            #     else:
+            #         del batch_pc[k][b]
+            #         # print(mpjpe_g3d.val)
+            # if len(batch_pc[k]) >= 1: # no points in one 
+            #     batch_pc[k] = torch.cat(batch_pc[k], dim=0) # TODO: need the further alignment
+            #     select_2d_match[k] = torch.cat(select_2d_match[k],dim=0)
+            #     indx_match[k] = torch.cat(indx_match[k], dim=0)
+            #     viewidx_match[k] = torch.cat(viewidx_match[k],dim=0)
+            # else:
+            #     debug_flag = 1 # TODO: 可以稍微放松要求
+
+            if len(batch_pc[k]) < 1:
+                debug_flag = 1
+        
+        # 3D part and get the pose
+        # try:
+        if debug_flag:
+            # assert False
+            debug_flag = 0
+            continue
+        
+        pose_2d_related = dict() # all possible views
+        for node in [0,1,2]:
+            pose_2d_related[node] = torch.zeros(1, 10, cfg.DATASET.KEYPOINT.NUM, 7) #
+        
+        pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size, cam_info, pose_2d_collect, pose_2d_related, device, root_idx=0) # changed the 
+        pred_bodys_3d = pred_bodys_3d.to(device)
+        pred_bodys_3d = pred_bodys_3d[0,...]
+        pred_num = torch.sum(pred_bodys_3d[:,0,3]>0)
+        if pred_num  == 0:
+            continue
+        pred_bodys_3d = pred_bodys_3d[:pred_num,...]
+        gt_3d = torch.from_numpy(gt_joints)  #joints3d_global[0,...] # batch is 1
+        judge = (torch.sum((gt_3d != 0), dim=-1) > 0 )
+        gt_num = torch.sum(torch.any(judge, dim=-1))
+        gt_3d = torch.cat([gt_3d, judge.unsqueeze(-1).float()], dim=-1)
+        gt_3d = gt_3d[:gt_num, ...]
+        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe) # output # unit is meter
+        for view in per_frame_info.keys():
+            cmp_3d = pose_2d_related[view][0,:pred_num,:,:3]
+
+            vis_label = torch.any(cmp_3d != 0 , dim=-1, keepdim=True)
+            cmp_3d = torch.cat([cmp_3d, vis_label.float()], dim = -1)
+            _,_ = val_match(cmp_3d,gt_3d,mpjpe_orig[view])
+        
+            
+    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'  #
+    logger.info(msg)  
+    for v in range(view_num):
+        msg =  f'EPOCH {total_iter}: The MPJPE orig {v} is {mpjpe_orig[v].avg}'  #
+        logger.info(msg)
+
+
 def refine_2dgt(pred_2d, gt2d, threshold=50):
     # gt _2d + pred_depth + pred_visible
     # match the hip 2 hip can not be invisible
@@ -1138,7 +1307,7 @@ def refine_2d_hrnet(pred_2d, hr2d, threshold=50):
     valid_label = np.array(list(er_match.values())) < threshold 
     pred_idx = pred_idx[valid_label]
     gt_idx = gt_idx[valid_label]
-
+    
     c_pose = hr2d[gt_idx, :, :2]
     pred_pose = pred_2d[pred_idx,:,:].copy()
     pred_pose[:,:,:2] = c_pose
@@ -1362,7 +1531,7 @@ def val_match(pred_3d_total, gt_3d, mpjpe, threshold=50): # FN
     # if torch.isnan(error):
     #     import pdb; pdb.set_trace() # check out one
     if torch.isnan(error):
-        mpjpe.update(500) # using 500 instead
+        print('nan') # using 500 instead
     else:
         mpjpe.update(error.item())
     filtered_pose = pred_3d_total[filtered_id,...]
@@ -1459,7 +1628,7 @@ def tensor2im(input_image, imtype=np.uint8):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--test_mode", "-t", type=str, default="run_inference",
-                        choices=['generate_train', 'generate_result', 'run_inference', 'off_the_shelf'],
+                        choices=['generate_train', 'generate_result', 'run_inference', 'off_the_shelf','cross'],
                         help='Type of test. One of "generate_train": generate refineNet datasets, '
                              '"generate_result": save inference result and groundtruth, '
                              '"run_inference": save inference result for input images.')
@@ -1492,6 +1661,7 @@ def main():
             cfg.DATASET.NAME, cfg.TEST_DIR, 0, 'test_log_{}.txt'.format(args.test_mode))
 
     device = torch.device(cfg.MODEL.DEVICE)
+
     if args.test_mode == "off_the_shelf":
         poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1019res/stage3_root2/iter-last.pth'
         poserefine = Pose_GCN()
@@ -1501,6 +1671,10 @@ def main():
         poserefine.load_state_dict(state_dict)
         pose_file = os.path.join('/home/panzhiyu/project/3d_pose/SMAP/model_logs_0821/stage3_root2/validation_result/','stage3_root2_generate_result_test_orig.pkl')
         easy_mode(pose_file, poserefine ,cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
+    elif  args.test_mode == "cross":
+        pose_file = os.path.join('/Extra/panzhiyu/CampusSeq1','smap_result_new.pkl')
+        easy_mode_cross(pose_file, None ,cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
+
     else:
         model = SMAP(cfg, run_efficient=cfg.RUN_EFFICIENT)
 

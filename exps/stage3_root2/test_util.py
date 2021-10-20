@@ -222,7 +222,7 @@ def save_result(pred_bodys_2d, pred_bodys_3d, pred_g3d, aligned_g3d ,gt_bodys, g
         pair['gt_2d'] = list()
     result['3d_pairs'].append(pair)
 
-def save_result_multiview(pred_bodys_2d, pred_bodys_3d, pred_g3d, aligned_g3d ,gt_bodys, gt_global,pred_rdepths, img_path,result): #
+def save_result_multiview(pred_bodys_2d, pred_bodys_3d, pred_g3d, aligned_g3d ,gt_bodys, gt_global,pred_rdepths, img_path,result):
     
     pair = dict()
     pair['pred_2d'] = pred_bodys_2d.tolist()

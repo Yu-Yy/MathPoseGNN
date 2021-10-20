@@ -79,7 +79,7 @@ def main():
         #         # logger.info(f'load the pretrained model from {cfg.MODEL.WEIGHT}') 
         #         model.preload(cfg.MODEL.WEIGHT) # just load the SMAP part .module.module.
 
-        data_dir = '/Extra/panzhiyu/CMU_data/gnn_train4' # same dataset
+        data_dir = '/Extra/panzhiyu/CMU_data/gnn_train_oldv5' # same dataset
         train_data_loader = get_traingnn_loader(cfg, num_gpu=num_gpu, data_dir=data_dir, is_dist=engine.distributed) # 图片增强， MDS true
         # vali_data_loader = get_test_loader(cfg, num_gpu=num_gpu, local_rank=0, stage='test') # TODO : temp comment
 
@@ -120,10 +120,9 @@ def main():
                 continue
             gt_3d = gt_3d.to(device)
             gt_3d = gt_3d.reshape(-1,cfg.DATASET.MAX_PEOPLE, cfg.DATASET.KEYPOINT.NUM,4)
-            pos_test = (matched_pred3d > 1000)
-            neg_test = (matched_pred3d < -1000)
+            inf_test = torch.isinf(matched_pred3d)
             nan_test = torch.isnan(matched_pred3d)
-            valid_check  = torch.cat([pos_test.unsqueeze(-1),neg_test.unsqueeze(-1),nan_test.unsqueeze(-1)], dim=-1)
+            valid_check  = torch.cat([inf_test.unsqueeze(-1),nan_test.unsqueeze(-1)], dim=-1)
             valid_check = torch.any(valid_check, dim = -1) 
             valid_check = torch.any(valid_check, dim = -1) 
             valid_re = valid_check.view(-1)
@@ -158,7 +157,7 @@ def main():
             loss_2d = torch.sum(temp_d_collect) / valid_p
 
             loss_2d = loss_2d / len(final_pred2d.keys())
-            losses = 0.001 * loss_2d + loss_3d + residue_loss  #
+            losses = 0.01 * loss_2d + loss_3d + 10 * residue_loss #
             loss_dict = dict()
             loss_dict['total'] = losses
             loss_dict['2d'] = loss_2d
@@ -168,7 +167,7 @@ def main():
             optimizer.zero_grad()
             losses.backward()
             optimizer.step()
-            # scheduler.step() # no scheduler
+            scheduler.step() # no scheduler
 
             # if loss_3d > 0:
             #     optimizer2.zero_grad()

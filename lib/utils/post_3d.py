@@ -76,6 +76,7 @@ def back_to_global(x, d, K, Kd, R,t):
     X = np.zeros((x.shape[0], 3), np.float)
     # X[:, 0] = (x[:, 0] - K[0, 2]) * d / K[0, 0]
     # X[:, 1] = (x[:, 1] - K[1, 2]) * d / K[1, 1]
+    
     X[:, 0] = (x[:, 0] - K[0, 2]) / K[0, 0]
     X[:, 1] = (x[:, 1] - K[1, 2]) / K[1, 1]
     # process the distorsion parameters undistorsion

@@ -195,13 +195,13 @@ def probalistic_torch(di_pointcloud):
     orth1 = orth1 / torch.norm(orth1,dim=-1,keepdim=True)
     orth2 = torch.cross(va_direction, orth1)
     # get the covariance matrix
-    p = 9 * torch.einsum('bij,bik-> bijk', va_direction, va_direction) + 1 * torch.einsum('bij,bik-> bijk', orth1, orth1) + 1 * torch.einsum('bij,bik-> bijk', orth2, orth2)
+    p = 9 * torch.einsum('bij,bik-> bijk', va_direction, va_direction) + 1 * torch.einsum('bij,bik-> bijk', orth1, orth1) + 1 * torch.einsum('bij,bik-> bijk', orth2, orth2) #(9 1 1)
     return mu, p
 
 def group_probalistic(orig_xyz, group_inds, group_mask):
     # orig: B, N, 21
     # group: B,Npoint,M
-    # 
+    
     # using unique acoording to different 
     B, npoints, nsamples = group_inds.shape
     dim_n = orig_xyz.shape[-1]
@@ -607,7 +607,7 @@ def pc_fused(batch_pc):
     inds, group_inds, debug_xyz1 = PA_FPSTEST(cat_xyz)
     mask = ((group_inds[:,:,0:1].repeat(1,1,nsample_1) - group_inds) !=0)
     mask[:,:,0] = True
-    group_mu, group_sigma, xyz2  = group_probalistic(cat_xyz, group_inds, mask) # First point is omitted
+    group_mu, group_sigma, xyz2 = group_probalistic(cat_xyz, group_inds, mask) # First point is omitted
     flag = torch.sum(mask,dim=-1)
 
     # # group 2 

@@ -85,6 +85,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
         # imgs, meta_data, img_path, scales = batch #
         
         imgs_mul, cam_paras, joints3d_global, joints3d_local_mul, scales = batch
+        import pdb; pdb.set_trace()
+        
         imgs_mul = imgs_mul.to(device)
         batch_size = imgs_mul.shape[0]
         with torch.no_grad():
@@ -202,9 +204,9 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     # if cfg.TEST_MODE == "generate_train":
                     #     save_result_for_train_refine(pred_bodys_2d, new_pred_bodys_3d, gt_bodys, pred_rdepths, result)
                     # else:
-                        # vis the data
+                        #vis the data
                     # gt_3d amd new_pred_bodys_3d (分关节 和 总共)
-                    val(torch.Tensor(pred_bodys_3d), torch.Tensor(gt_bodys[:,:,3:7]), mpjpe, kp_set)
+                    # val(torch.Tensor(pred_bodys_3d), torch.Tensor(gt_bodys[:,:,3:7]), mpjpe, kp_set)
                     # import pdb; pdb.set_trace()
                     # set the global coordinate to test the project , 
                     
