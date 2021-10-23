@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 # debug the file error
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
-
+from lib.utils.post_3d import back_to_global
 from cvpack.utils.logger import get_logger
 from model.smap import SMAP
 from model.pose2d_gnn import Pose_GCN
@@ -107,7 +107,7 @@ unified_bones_def14 = [
 File_Name = '/Extra/panzhiyu/CMU_data/keypoints_validation_results.json'
 OFF_FILE = '/home/panzhiyu/project/3d_pose/SMAP/keypoints_validation_results.pkl'
 
-save_dir = '/Extra/panzhiyu/CMU_data/gnn_train_oldv5/'
+save_dir = '/Extra/panzhiyu/CMU_data/gnn_hm/'
 
 with open(OFF_FILE,'rb') as f:
     pred_2d_results = pickle.load(f)
@@ -166,7 +166,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
 
         # Select the test set  !!!!
         # c_image = scales[0]['img_paths'][0].split(root_dir)[-1]
-        # hm_collect = []
+        hm_collect = []
         # cam_c = []
         # pose2d_c = []
         # if c_image not in pred_2d_results.keys():
@@ -210,6 +210,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                 outputs_2d, outputs_3d, outputs_rd, output_feature = model(imgs) # the batch dim is 1
                 outputs_3d = outputs_3d.cpu()
                 outputs_rd = outputs_rd.cpu()
+                hm_collect.append(outputs_2d.clone().cpu().unsqueeze(0)) # all save
                 # if cfg.DO_FLIP:
                 #     outputs_2d_flip, outputs_3d_flip, outputs_rd_flip = model(imgs_flip)
                 #     outputs_2d_flip = torch.flip(outputs_2d_flip, dims=[-1])
@@ -275,7 +276,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     rDepth = outputs_rd[i][0]
                     # vis the rDepth
 
-                    # hm_collect.append(hmsIn[:cfg.DATASET.KEYPOINT.NUM].clone())
 
                     pred_bodys_2d = dapalib.connect(hmsIn, rDepth, cfg.DATASET.ROOT_IDX, distFlag=True) # depth-aware part association lib # 存在预测分数
                     
@@ -424,7 +424,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             # judge if it is the target 
 
             # generate the PC:
-            
             failure_folder = os.path.join(output_dir,'vis_pose3d')
             rgb_folder = os.path.join(output_dir,'vis_rgb')
             debug_flag = 0
@@ -495,6 +494,9 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             # find the corresponding matched_gt
             matched_pred, matched_gt, matched_pred_single = matchgt(pred_bodys_3d, joints3d_global, pose_2d_related)
             gt_bodys_2d = project_views(matched_gt, cam_info) # combine with the out of view information
+            hm_collect = torch.cat(hm_collect, dim=0)
+            # import pdb;pdb.set_trace()
+            sampled_heatmap = project_views_samples(pred_bodys_3d, cam_info, scale, hm_collect)
 
             # for b in range(batch_size):
             #     matched_pred_b = matched_pred[b,...]
@@ -516,6 +518,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             gnn_pair['gt_3d'] = matched_gt.cpu()
             gnn_pair['gt_2d'] = gt_bodys_2d
             gnn_pair['cam'] = cam_info
+            gnn_pair['hmIn'] = sampled_heatmap
             for k in gnn_pair['gt_2d'].keys():
                 gnn_pair['gt_2d'][k] = gnn_pair['gt_2d'][k].cpu()
                 for n_k in gnn_pair['cam'][k].keys():
@@ -525,6 +528,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             with open(os.path.join(save_dir,file_name), 'wb') as f:
                 pickle.dump(gnn_pair, f)
             save_idx += 1
+            
 
             # # the refinenet
             # _, refine_res = gnn_net(pred_bodys_2d, smap_feature, cam_info)
@@ -774,6 +778,13 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
     scale['img_height'] = 1080
     mpjpe = AverageMeter()
     mpjpe_refined = AverageMeter()
+    mpjpe_refined2 = AverageMeter()
+    precision = FPAverageMeter()
+    recall = FPAverageMeter()
+    precision_r = FPAverageMeter()
+    recall_r = FPAverageMeter()
+    precision_r2 = FPAverageMeter()
+    recall_r2 = FPAverageMeter()
     idx = 1
     # IDX_sort = 3576
     while IDX_sort < total_len:
@@ -921,20 +932,26 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
         pred_bodys_3d = pred_bodys_3d.to(device)
         with torch.no_grad():
             if poserefine is not None:
-                refine_bodys_3d, _ = poserefine(pose_2d_related, pred_bodys_3d)
-
+                refine_bodys_3d, _, _ = poserefine(pose_2d_related, pred_bodys_3d) # It has the single pred PAY ATENTION TO THIS
         refine_bodys_3d = torch.cat([refine_bodys_3d, pred_bodys_3d[...,3:4]],dim=-1)
+        with torch.no_grad():
+            if poserefine is not None:
+                refine_bodys_3d2, _, _ = poserefine(pose_2d_related, refine_bodys_3d) # It has the single pred PAY ATENTION TO THIS
+        refine_bodys_3d2 = torch.cat([refine_bodys_3d2, pred_bodys_3d[...,3:4]],dim=-1)
         pred_bodys_3d = pred_bodys_3d[0,...]
         refine_bodys_3d = refine_bodys_3d[0,...]
+        refine_bodys_3d2 = refine_bodys_3d2[0,...]
         pred_num = torch.sum(pred_bodys_3d[:,0,3]>0)
         if pred_num  == 0:
             continue
         pred_bodys_3d = pred_bodys_3d[:pred_num,...]
         refine_bodys_3d = refine_bodys_3d[:pred_num,...]
+        refine_bodys_3d2 = refine_bodys_3d2[:pred_num,...]
         gt_3d = torch.from_numpy(gt_joints)  #joints3d_global[0,...] # batch is 1
         # gt_3d = gt_3d[:,[0]+panoptic_to_unified,:]  # It is for hrnet standard
-        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe) # output
-        _,_ = val_match(refine_bodys_3d.cpu(),gt_3d,mpjpe_refined)
+        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe, precision, recall, ap_threshold=2.5) # output
+        _,_ = val_match(refine_bodys_3d.cpu(),gt_3d,mpjpe_refined, precision_r, recall_r, ap_threshold=2.5)
+        _,_ = val_match(refine_bodys_3d2.cpu(),gt_3d,mpjpe_refined2,precision_r2, recall_r2, ap_threshold=2.5) # useless 
         if np.isnan(np.array(mpjpe.val)):
             import pdb; pdb.set_trace()
 
@@ -1046,7 +1063,6 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
     cam_file = '/Extra/panzhiyu/CampusSeq1/cam_para.pkl'  # for campus test
     with open(cam_file, 'rb') as f:
         cam_para = pickle.load(f)
-
     init_num = 2000
     max_length = 0
     for v in range(view_num):
@@ -1059,10 +1075,14 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
 
     shift_size = 3 # shift size is 1
     scale = dict()
-    scale['img_width'] = 360
-    scale['img_height'] = 288
+    scale['img_width'] = 360 # TODO 1032
+    scale['img_height'] = 288 # 776
     mpjpe = AverageMeter()
-    mpjpe_orig = [AverageMeter() for _ in range(3)]
+    mpjpe_orig = [AverageMeter() for _ in range(view_num)]
+    precision = FPAverageMeter()
+    recall = FPAverageMeter()
+    precision_orig = [FPAverageMeter() for _ in range(view_num)]
+    recall_orig = [FPAverageMeter() for _ in range(view_num)]
 
     for i in tqdm(range(max_length)):
         current_num = init_num + i
@@ -1091,6 +1111,7 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
             pose_2d = info['pred']  # It is reduced
             gt_bodys = info['gt_local']
             image_path = info['img_path']
+            
             # match the hrnet
 
             # idx_path = image_path.split(root_path)[-1]
@@ -1123,8 +1144,23 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
             vis_gt_2d_collect.append(gt_bodys[:,:,[0,1,3]])
             vis_pred_collect.append(pose_2d[:,:,[0,1,3]])
             vis_img_path.append(image_path)
-            generate_pc_connection(pose_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, 0, shift_size, root_idx=0) #adjust_2dcmu_pred_2d
-            
+            temp_2d = pose_2d.reshape(-1,4)
+            temp_3d = back_to_global(temp_2d[:,:2],temp_2d[:,2],cam_p['K'], cam_p['distCoef'],cam_p['R'], cam_p['t'])
+            single_3d = temp_3d.reshape(-1,15,3) * 100
+            single_3d = np.concatenate([single_3d, pose_2d[...,3:4]], axis=-1)
+            single_3d = torch.from_numpy(single_3d)
+            # 3D COMPARE
+            gt_3d = torch.from_numpy(gt_joints)  #joints3d_global[0,...] # batch is 1
+            judge = (torch.sum((gt_3d != 0), dim=-1) > 0 )
+            gt_num = torch.sum(torch.any(judge, dim=-1))
+            gt_3d = torch.cat([gt_3d, judge.unsqueeze(-1).float()], dim=-1)
+            gt_3d = gt_3d[:gt_num, ...]
+            gt_3d[...,:3] = gt_3d[...,:3] * 100
+            _,_ = val_match(single_3d,gt_3d,mpjpe_orig[view], precision_orig[view], recall_orig[view])
+
+
+            generate_pc_connection(pose_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, 0, shift_size, root_idx=2) #adjust_2dcmu_pred_2d
+
             for k, v in cam_p.items():
                 cam_p[k] = torch.from_numpy(v).to(device).to(torch.float)
             cam_info[view] = cam_p
@@ -1142,8 +1178,10 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
                 if len(batch_pc[k][b]) >= 1 : 
                     # batch_pc[k][b] = torch.cat(batch_pc[k][b], dim = 0)
                     batch_pc[k][b] = np.concatenate(batch_pc[k][b], axis = 0)
+                    batch_pc[k][b][:,:3] = batch_pc[k][b][:,:3] * 100
                     batch_pc[k][b] = torch.from_numpy(batch_pc[k][b]).to(device).unsqueeze(0)
                     select_2d_match[k][b] = np.concatenate(select_2d_match[k][b], axis=0)
+                    select_2d_match[k][b][:,:3] = select_2d_match[k][b][:,:3] * 100
                     select_2d_match[k][b] = torch.from_numpy(select_2d_match[k][b]).to(device).unsqueeze(0)
                     indx_match[k][b] = np.concatenate(indx_match[k][b], axis = -1)
                     indx_match[k][b] = torch.from_numpy(indx_match[k][b]).to(device) # to_device    
@@ -1169,12 +1207,12 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
             # assert False
             debug_flag = 0
             continue
-        
+
         pose_2d_related = dict() # all possible views
-        for node in [0,1,2]:
+        for node in range(view_num):
             pose_2d_related[node] = torch.zeros(1, 10, cfg.DATASET.KEYPOINT.NUM, 7) #
         
-        pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size, cam_info, pose_2d_collect, pose_2d_related, device, root_idx=0) # changed the 
+        pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size, cam_info, pose_2d_collect, pose_2d_related, device, root_idx=2) # changed the 
         pred_bodys_3d = pred_bodys_3d.to(device)
         pred_bodys_3d = pred_bodys_3d[0,...]
         pred_num = torch.sum(pred_bodys_3d[:,0,3]>0)
@@ -1186,19 +1224,20 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
         gt_num = torch.sum(torch.any(judge, dim=-1))
         gt_3d = torch.cat([gt_3d, judge.unsqueeze(-1).float()], dim=-1)
         gt_3d = gt_3d[:gt_num, ...]
-        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe) # output # unit is meter
-        for view in per_frame_info.keys():
-            cmp_3d = pose_2d_related[view][0,:pred_num,:,:3]
+        gt_3d[...,:3] = gt_3d[...,:3] * 100
+        vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe, precision, recall) # output # unit is meter  
+        # for view in per_frame_info.keys():
+        #     cmp_3d = pose_2d_related[view][0,:pred_num,:,:3]
 
-            vis_label = torch.any(cmp_3d != 0 , dim=-1, keepdim=True)
-            cmp_3d = torch.cat([cmp_3d, vis_label.float()], dim = -1)
-            _,_ = val_match(cmp_3d,gt_3d,mpjpe_orig[view])
-        
-            
-    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'  #
+        #     vis_label = torch.any(cmp_3d != 0 , dim=-1, keepdim=True)
+        #     cmp_3d = torch.cat([cmp_3d, vis_label.float()], dim = -1)
+        #     _,_ = val_match(cmp_3d,gt_3d,mpjpe_orig[view])
+
+
+    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}, Precision {precision.avg}, Recall {recall.avg}'  #
     logger.info(msg)  
     for v in range(view_num):
-        msg =  f'EPOCH {total_iter}: The MPJPE orig {v} is {mpjpe_orig[v].avg}'  #
+        msg =  f'EPOCH {total_iter}: The MPJPE orig {v} is {mpjpe_orig[v].avg}, Precision {precision_orig[v].avg}, Recall {recall_orig[v].avg}'  #
         logger.info(msg)
 
 
@@ -1492,7 +1531,7 @@ def val_fn(pred_3d_total, gt_3d, mpjpe, kp_set, threshold=500): # FN
     return vis_label    
 
 
-def val_match(pred_3d_total, gt_3d, mpjpe, threshold=50): # FN
+def val_match(pred_3d_total, gt_3d, mpjpe, precision, recall, threshold=50, ap_threshold=100): # FN
     # need to put in the CPU eval
     pred_3d = pred_3d_total[...,:3] # N X K X 3
     pred_vis = pred_3d_total[...,3] # N X K
@@ -1509,12 +1548,14 @@ def val_match(pred_3d_total, gt_3d, mpjpe, threshold=50): # FN
             mask2 = (pose_vis > 0)
             mask = mask1 * mask2
             if torch.sum(mask) == 0:
-                temp_mpjpe.append(torch.tensor(550))
+                temp_mpjpe.append(torch.tensor(5000))
                 continue
             c_mpjpe = torch.mean(torch.norm((pose[mask,:] - gt[mask,:]), dim=-1))
             temp_mpjpe.append(c_mpjpe)
         min_gt = torch.argmin(torch.Tensor(temp_mpjpe))
         min_mpjpe = torch.min(torch.Tensor(temp_mpjpe))
+        if min_mpjpe == 5000: # 
+            continue
         if min_gt.item() in mpjpe_save.keys():
             if min_mpjpe < mpjpe_save[min_gt.item()]:
                 mpjpe_save[min_gt.item()] = min_mpjpe
@@ -1526,13 +1567,21 @@ def val_match(pred_3d_total, gt_3d, mpjpe, threshold=50): # FN
     vis_label = torch.any(error_list > 40) # output the greater than 3
     mask_label = (error_list < threshold)
     filtered_id = list(mpjpe_id.values())
+
+    ap_mask = (error_list < ap_threshold)
+    tp_num = len(error_list[ap_mask])
+    gt_num = gt_3d.shape[0]
+    pred_num = pred_3d_total.shape[0]
+    precision.update(tp_num, pred_num)
+    recall.update(tp_num, gt_num)
     # if len(error_list[mask_label]) > 0:
-    error = torch.mean(error_list[mask_label])
+    # error = torch.mean(error_list[mask_label]) # TODO: test the single view performance
+    error = torch.mean(error_list) # TODO: test the single view performance
     # if torch.isnan(error):
     #     import pdb; pdb.set_trace() # check out one
-    if torch.isnan(error):
-        print('nan') # using 500 instead
-    else:
+    if ~torch.isnan(error):
+        # print('nan') # using 500 instead
+    # else:
         mpjpe.update(error.item())
     filtered_pose = pred_3d_total[filtered_id,...]
     filtered_pose = filtered_pose[mask_label,...]
@@ -1558,6 +1607,7 @@ def vis_2d(hmsIn_collect, img, folder_name, idx, idx_v, total_iter = 0): # root_
     #     os.makedirs(paf_folder)
     # if not os.path.exists(rootd_folder):
     #     os.makedirs(rootd_folder)
+
 
     for hmsIn in hmsIn_collect:
         hmsIn = hmsIn.detach().cpu().numpy().transpose(1, 2, 0) # 直接输入
@@ -1595,7 +1645,6 @@ def vis_2d(hmsIn_collect, img, folder_name, idx, idx_v, total_iter = 0): # root_
         #     colored_bool = cv2.applyColorMap(vis_paf, cv2.COLORMAP_JET)
         #     image_fusing = vis_pic * 0.3 + colored_bool * 0.7
         #     cv2.imwrite(os.path.join(paf_folder, f'paf_iter_{total_iter}_i_{idx}_v_{idx_v}_paf_{con_idx}.jpg'), image_fusing)    
-
 
 def tensor2im(input_image, imtype=np.uint8):
     """"将tensor的数据类型转成numpy类型，并反归一化.
@@ -1663,7 +1712,8 @@ def main():
     device = torch.device(cfg.MODEL.DEVICE)
 
     if args.test_mode == "off_the_shelf":
-        poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1019res/stage3_root2/iter-last.pth'
+        # poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1019res/stage3_root2/iter-last.pth'
+        poserefine_file = '/home/panzhiyu/project/3d_pose/SMAP/model_logs_1020_singletest/stage3_root2/best_model.pth'
         poserefine = Pose_GCN()
         poserefine.to(device) 
         state_dict = torch.load(poserefine_file, map_location=lambda storage, loc: storage)

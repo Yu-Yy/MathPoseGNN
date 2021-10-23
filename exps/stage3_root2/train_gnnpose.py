@@ -129,11 +129,11 @@ def main():
             matched_pred3d_re = matched_pred3d.view(-1,4)
             matched_pred3d_re[valid_re,:] = 0 # all set to 0
             com_3d = matched_pred3d.detach().clone()
-            final_pred3d, residue_loss = model(matched_pred_single, matched_pred3d)
+            final_pred3d, residue_loss, refined_single_pos = model(matched_pred_single, matched_pred3d)
             final_pred3d = torch.cat([final_pred3d, matched_pred3d[...,3:4]], dim=-1)
             # project and get the pred2d
             final_pred2d = project_views(final_pred3d, cam_info)
-            # # loss_3d part 
+            # loss_3d part 
             gt_3d_vis = (gt_3d[...,3] > 0) 
             orig_3d_valid = (com_3d[...,3] > 0)
             temp_loss_3d =  torch.norm(final_pred3d[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * (gt_3d_vis * orig_3d_valid)
@@ -143,6 +143,19 @@ def main():
             temp_comp_3d = torch.norm(com_3d[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * (gt_3d_vis * orig_3d_valid)
             # valid_3d_people = torch.sum(temp_comp_3d > 0 )
             comp_3d = torch.sum(temp_comp_3d) / valid_people
+            
+            # view_num = len(matched_pred_single.keys())
+            view_collect = list(matched_pred_single.keys())
+            loss_3d_single = 0
+            for v, view in enumerate(view_collect):
+                current_view_pose = refined_single_pos[v,...]
+                gt_3d_vis = (gt_3d[...,3] > 0) 
+                orig_3d_valid_single = (matched_pred_single[view][...,6] > 0.3)
+                temp_loss_3d_single =  torch.norm(current_view_pose[...,:3] - gt_3d[...,:3], dim=-1) ** 2 * (gt_3d_vis * orig_3d_valid_single)
+                valid_people = torch.sum(temp_loss_3d_single > 0 )
+                loss_3d_single = loss_3d_single + torch.sum(temp_loss_3d_single) / valid_people
+            
+            loss_3d_single = loss_3d_single / len(view_collect)
 
             temp_d_collect = []
             for k in final_pred2d.keys():
@@ -157,11 +170,12 @@ def main():
             loss_2d = torch.sum(temp_d_collect) / valid_p
 
             loss_2d = loss_2d / len(final_pred2d.keys())
-            losses = 0.01 * loss_2d + loss_3d + 10 * residue_loss #
+            losses = 0.001 * loss_2d + loss_3d + 10 * residue_loss + loss_3d_single  #
             loss_dict = dict()
             loss_dict['total'] = losses
             loss_dict['2d'] = loss_2d
             loss_dict['3d'] = loss_3d
+            loss_dict['single_3d'] = loss_3d_single
             loss_dict['residue'] = residue_loss
             loss_dict['comp_3d'] = comp_3d
             optimizer.zero_grad()

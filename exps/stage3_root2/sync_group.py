@@ -659,7 +659,7 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
     # process the root_idx first
     ## do not set the batch_pc_k with batch size, batch_pc_k is the list
     # loop in the batch dim
-    valid_num = (shift_size * 2) ** 2
+    valid_num = (shift_size * 2) ** 2 + 1
     batch_pc_b = batch_pc_k[root_idx]
     batch_num = len(batch_pc_b)
     batch_pred_3d = torch.zeros(batch_num, max_people,cfg.DATASET.KEYPOINT.NUM, 4)
@@ -682,7 +682,7 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
         nsample_1 = 512
         npoints = 10 # 10
         PA_FPSTEST = PointnetSAModuleDebug(npoint=npoints+1,  # mainly for downsampling
-                    radius=15,  # to a larger one 15
+                    radius=13,  # to a larger one 15
                     nsample=nsample_1,
                     mlp=[21, 64, 64, 128],
                     use_xyz=True,
@@ -701,7 +701,9 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
         
 
         mask = ((group_inds[:,:,0:1].repeat(1,1,nsample_1) - group_inds) !=0)
+        center_filter = (group_inds != 0)
         mask[:,:,0] = True
+        mask = mask * center_filter
         # final_mask = mask[:,1:,:]
         group_mu, group_sigma, xyz2, vali_mask  = group_probalistic(cat_xyz, group_inds, mask) # First point is omitted
         flag = torch.sum(mask,dim=-1)
@@ -727,6 +729,28 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
         select_mask =  nms_mask * limit_mask # TODO: do not use the limit mask  
         # get the root joint related
         
+        ###################  vis
+        # inds = inds.squeeze(0)
+        # group_inds = group_inds.squeeze(0)
+        # extracted_xyz = cat_xyz[0,inds[4].long(),:] #.cpu().numpy()
+        # debug_extracted_xyz = cat_xyz[0, group_inds[4].cpu().long(),:] #.cpu().numpy()
+        # extract_pose_mu = sorted_group_mu_root[0,select_mask[0,...],:]
+        # # test the KL distance
+        # extracted_xyz = extracted_xyz.unsqueeze(0).unsqueeze(0)
+        # extracted_xyz = extracted_xyz.repeat(1,512,1)
+        # debug_extracted_xyz = debug_extracted_xyz.unsqueeze(0)
+        # debug_dis = BKL_Div(extracted_xyz[0,:,:3], debug_extracted_xyz[0,:,:3], extracted_xyz[0,:,3:12], debug_extracted_xyz[0,:,3:12])
+        # fig = plt.figure(figsize=(20, 15))
+        # ax = fig.add_subplot(projection='3d')
+        # ax.scatter(mu[0,:,0].cpu().numpy(), mu[0,:,1].cpu().numpy(), mu[0,:,2].cpu().numpy(), marker='o', s = 4)
+        # # ax.scatter(extracted_xyz[:,0,0].cpu().numpy(), extracted_xyz[:,0,1].cpu().numpy(), extracted_xyz[:,0,2].cpu().numpy(), marker='^',s = 640)
+        # ax.scatter(extract_pose_mu[:,0].cpu().numpy(), extract_pose_mu[:,1].cpu().numpy(), extract_pose_mu[:,2].cpu().numpy(), marker='^',s = 640)
+        # # debug one point
+        # ax.scatter(debug_extracted_xyz[0,:,0].cpu().numpy(),debug_extracted_xyz[0,:,1].cpu().numpy(),debug_extracted_xyz[0,:,2].cpu().numpy(),marker='o', s = 16)
+        # # ax.scatter(extracted_xyz[:,0], extracted_xyz[:,1], extracted_xyz[:,2], marker='^',s = 640)
+        # plt.savefig('debugfps.png')
+        # import pdb; pdb.set_trace()
+        ####################
         # TODO: for one batch
         # sorted_mcenter = sorted_mcenter[select_mask]
         # sorted_fmask = sorted_fmask[select_mask]

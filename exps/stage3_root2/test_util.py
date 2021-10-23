@@ -9,6 +9,8 @@ from numpy.lib.function_base import append
 import torch
 import torch.optim as optim
 import time
+from torch.nn import ZeroPad2d
+import torch.nn.functional as F
 
 from torch.optim.optimizer import Optimizer
 
@@ -818,3 +820,95 @@ def project_views(pred_bodys_3d_r, cam_info):
 #         matched_gt[b,:pred_num,...] = filtered_gt
     
 #     return matched_pred, matched_gt
+
+class BlurConv(torch.nn.Module):
+    def __init__(self, channels=3, device = torch.device('cpu')):
+        super(BlurConv, self).__init__()
+        self.channels = channels
+        # kernel = [[0.00078633, 0.00655965, 0.01330373, 0.00655965, 0.00078633],
+        #           [0.00655965, 0.05472157, 0.11098164, 0.05472157, 0.00655965],
+        #           [0.01330373, 0.11098164, 0.22508352, 0.11098164, 0.01330373],
+        #           [0.00655965, 0.05472157, 0.11098164, 0.05472157, 0.00655965],
+        #           [0.00078633, 0.00655965, 0.01330373, 0.00655965, 0.00078633]]
+        
+        # kernel = torch.FloatTensor(kernel).to(device).unsqueeze(0).unsqueeze(0)
+        kernel = torch.ones(self.channels,1,9,9)
+        # kernel = kernel.repeat(self.channels,1,1,1)
+        self.weight = torch.nn.Parameter(data=kernel, requires_grad=False)
+ 
+    def __call__(self, x):
+        x = F.conv2d(x, self.weight, padding=4, groups=self.channels)
+        return x
+
+
+
+def project_views_samples(pred_bodys_3d_r, cam_info, scale, hm_collect): 
+    # project the 3D into different 2d
+    # hm_collect # V x 4 x 43 x w x h
+    batch, max_people, kp_num, _ = pred_bodys_3d_r.shape
+    num_judge = torch.sum(pred_bodys_3d_r[...,3] > 0, dim=-1) # B X M
+    # valid_num = torch.sum(num_judge > 3, dim=-1) 
+    pad_tools = ZeroPad2d(8)
+    blur_tools = BlurConv(max_people * kp_num)
+    # pred_bodys_3d = pred_bodys_3d_r[:,:,:3]
+    # pred_bodys_3d = pred_bodys_3d_r[...,:3]
+    # pred_bodys_3d = pred_bodys_3d.reshape(-1,3)
+    # pred_vis = pred_bodys_3d_r[...,3].reshape(-1)
+    # pred_2d_project = dict()
+    pred_bodys_3d = pred_bodys_3d_r[...,:3]
+    pred_bodys_3d = pred_bodys_3d.reshape(-1,3)
+    hm_sampling_value = dict()
+    for v_idx,(v,cam_p) in enumerate(cam_info.items()):
+        pred_bodys_2d = projectjointsPoints_torch(pred_bodys_3d, cam_p['K'], cam_p['R'], cam_p['t'],cam_p['distCoef'])
+        pred_bodys_2d[:, 0] =(pred_bodys_2d[:, 0] + (scale['net_width']/scale['scale'][0]-scale['img_width'])/2) * scale['scale'][0] # the same dataset has the same parameter
+        pred_bodys_2d[:, 1] =(pred_bodys_2d[:, 1] + (scale['net_height']/scale['scale'][0]-scale['img_height'])/2) * scale['scale'][0] # different views has the same
+        pred_bodys_2d = torch.round(pred_bodys_2d / cfg.dataset.STRIDE)
+        x_check = torch.bitwise_and(pred_bodys_2d[:, 0] >= 0, 
+                                        pred_bodys_2d[:, 0] <= cfg.OUTPUT_SHAPE[1] - 1) #(15,) bool
+        y_check = torch.bitwise_and(pred_bodys_2d[:, 1] >= 0,
+                                    pred_bodys_2d[:, 1] <= cfg.OUTPUT_SHAPE[0] - 1) # just fix the coord
+        check = torch.bitwise_and(x_check, y_check) # 
+        pred_bodys_2d[~check,:] = 0 # all set to 0
+        hm_view = hm_collect[v_idx,...] # B X 43 X H X W
+        # padding the hw_view
+        hm_view_padding = pad_tools(hm_view) # B X 43 X H_ X W_
+        _,_,H,W = hm_view_padding.shape
+        pred_bodys_2d[:, 0] = pred_bodys_2d[:, 0] + 8
+        pred_bodys_2d[:, 1] = pred_bodys_2d[:, 1] + 8
+        pred_bodys_2d = pred_bodys_2d.reshape(batch, max_people, kp_num,2) # B X N X K
+
+        # create the mask
+        bg_template = torch.zeros((batch, max_people, H, W, kp_num))
+        new_y = torch.scatter(bg_template[:,:,:,0,:], dim=2, index=pred_bodys_2d[:,:,:,1].cpu().unsqueeze(2).to(torch.int64).repeat(1,1,H,1), src=torch.ones((batch, max_people, H,kp_num), dtype=torch.float)) # h x k
+        new_x = torch.scatter(bg_template[:,:,0,:,:], dim=2, index=pred_bodys_2d[:,:,:,0].cpu().unsqueeze(2).to(torch.int64).repeat(1,1,W,1), src=torch.ones((batch, max_people, W,kp_num), dtype=torch.float)) # w x k
+        new_bg = torch.einsum('bnik,bnjk -> bnijk', new_y, new_x)
+
+        new_bg = new_bg.permute(0,1,4,2,3)
+        new_bg = new_bg.reshape(batch,-1,H,W)
+        blur_mask = (blur_tools(new_bg) > 0)
+        blur_mask = blur_mask.reshape(batch, max_people, kp_num, H,W)
+        hm_view_padding = hm_view_padding[:, :kp_num, ...]
+        hm_view_padding = hm_view_padding.unsqueeze(1).repeat(1,max_people,1,1,1)
+
+        sampling_value = hm_view_padding[blur_mask] # fixed number recovered
+
+        sampling_value = sampling_value.reshape(batch,max_people,kp_num,9*9)
+        sampling_value_temp = sampling_value.view(-1,9*9)
+        sampling_value_temp[~check,:] = 0
+        hm_sampling_value[v] = sampling_value.clone()
+
+    return hm_sampling_value
+
+# hm_paf = torch.randn(29, 292, 380)
+# sam_coor = torch.randint(-10, 300, (29,2))
+# sam_coor_min = sam_coor - 8
+# sam_coor_max = sam_coor + 8
+# sam_margin = torch.cat((sam_coor_min, sam_coor_max), dim = 1)
+# H,W = hm_paf.shape[1:3]
+# valid_flag = (sam_margin[:,0]>=0) & (sam_margin[:,1]>=0) & (sam_margin[:,2] < H) \
+#     & (sam_margin[:,3] < W) & (sam_margin[:,0] < sam_margin[:,2]) & (sam_margin[:,1] < sam_margin[:,3])
+#     
+# sam_sample_this = torch.zeros([29, 16, 16])
+# for i in range(29):
+#     if valid_flag[i]:
+#         sam_sample_this[i] = hm_paf[i, sam_margin[i,0]:sam_margin[i,2], sam_margin[i,1]:sam_margin[i,3]]
