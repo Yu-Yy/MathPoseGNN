@@ -57,6 +57,7 @@ class Config:
 
     LOSS = edict()
     LOSS.OHKM = True
+
     LOSS.TOPK = 8
     LOSS.COARSE_TO_FINE = True
 
@@ -69,7 +70,7 @@ class Config:
     TEST.IMG_PER_GPU = 3
     TEST.ROOT_PATH = '/Extra/panzhiyu/CMU_data' #'/Extra/panzhiyu/Shelf'  #'/Extra/panzhiyu/Shelf' # '/Extra/panzhiyu/CMU_data'## '/Extra/panzhiyu/CMU_data'#  '/Extra/panzhiyu/CampusSeq1'
     TEST.JSON_PATH = osp.join(TEST.ROOT_PATH, 'cmu_data_train_multi.pkl') #  campus_meta_multi.pkl '' cmu_data_train_new5_multi.pkl  cmu_data_test_multi.pkl  cmu_data_gnn_new5temp1_multi.pkl
-    # cmu_data_gnn_final_multi.pkl cmu_data_test_multi.pkl cmu_data_train_multi.pkl shelf_meta_multi.pkl
+    # cmu_data_gnn_final_multi.pkl cmu_data_test_multi.pkl cmu_data_train_multi.pkl shelf_meta_multi.pkl  cmu_data_test_multi.pkl
 
 config = Config()
 cfg = config

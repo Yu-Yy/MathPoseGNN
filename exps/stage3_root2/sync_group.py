@@ -195,7 +195,7 @@ def probalistic_torch(di_pointcloud):
     orth1 = orth1 / torch.norm(orth1,dim=-1,keepdim=True)
     orth2 = torch.cross(va_direction, orth1)
     # get the covariance matrix
-    p = 9 * torch.einsum('bij,bik-> bijk', va_direction, va_direction) + 1 * torch.einsum('bij,bik-> bijk', orth1, orth1) + 1 * torch.einsum('bij,bik-> bijk', orth2, orth2) #(9 1 1)
+    p = 9 * torch.einsum('bij,bik-> bijk', va_direction, va_direction) + 0.01 * torch.einsum('bij,bik-> bijk', orth1, orth1) + 0.01 * torch.einsum('bij,bik-> bijk', orth2, orth2) #(9 1 1)
     return mu, p
 
 def group_probalistic(orig_xyz, group_inds, group_mask):
@@ -601,7 +601,6 @@ def pc_fused(batch_pc):
     #             use_xyz=True,
     #             normalize_xyz=True)
 
-
     # group 1 
     cat_xyz = get_model_corners(xyz_tensor)
     inds, group_inds, debug_xyz1 = PA_FPSTEST(cat_xyz)
@@ -682,7 +681,7 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
         nsample_1 = 512
         npoints = 10 # 10
         PA_FPSTEST = PointnetSAModuleDebug(npoint=npoints+1,  # mainly for downsampling
-                    radius=13,  # to a larger one 15
+                    radius=175,  # to a larger one 15
                     nsample=nsample_1,
                     mlp=[21, 64, 64, 128],
                     use_xyz=True,
@@ -726,7 +725,7 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
         # sorted_mcenter = torch.gather(extracted_center, dim=1, index = sort_index_center)
         # sorted_group_idx = torch.gather(group_idx_root, dim=1, index=sort_index_mask)
         nms_mask = p_nms(sorted_group_mu_root) # delete the init one [:,1:,:]
-        select_mask =  nms_mask * limit_mask # TODO: do not use the limit mask  
+        select_mask =  nms_mask * limit_mask #  limit mask may lead to false negative  
         # get the root joint related
         
         ###################  vis
@@ -875,15 +874,20 @@ def pc_fused_connection(batch_pc_k, indx_match, select_2d_match, viewidx_match, 
                 group_mu, _, _, vali_mask  = group_probalistic(xyz_tensor, sorted_new_group_idx[None,...], sorted_fmask[None,...]) 
                 group_mu = torch.cat([group_mu,vali_mask], dim=-1)
                 pred_num = sorted_mcenter.shape[0]
+                # unique_mask need to times the sorted_fmask
                 unique_mask = unique(sorted_mcenter)
-
+                # orig_mask = unique_mask.clone()
+                # flag1 = torch.sum(unique_mask)
+                unique_mask = unique_mask * sorted_fmask # consider the fact group result
+                # flag2 = torch.sum(unique_mask)
                 ## update the mu according to the 2D mismatch
                 for p in range(pred_num):
+                    # judge if this person in this joint is avaliable
                     p_center = sorted_mcenter[p][unique_mask[p]] 
                     p_views = sorted_view[p][unique_mask[p]]
                     # generate the 2D rela
                     for center, view in zip(p_center, p_views):
-                        pose_2d_related[view.item()][batch_idx, p, k, :] = center
+                        pose_2d_related[view.item()][batch_idx, p, k, :] = center # TODO: debug it 
 
                     # # delete the mismatch process
                     # invalid_center = [] # initialize the invalid center

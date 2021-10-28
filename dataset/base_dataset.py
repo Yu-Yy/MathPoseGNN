@@ -59,8 +59,7 @@ class JointDataset(Dataset):
         # different index may have different viewsW
         for i in range(len(data)): # transverse the whole image  # TODO: For campus demo
             # transverse all the views
-            # self.val_data.append(data[i]) # TODO: for run the result of shelf 
-            self.val_data.append(data[i]) # for gnn train
+            # self.val_data.append(data[i]) # TODO: for run the result of shelf or on cmu gnn # !!!!!
             if data[i][cam_nodes[0]]['isValidation'] != 0:
                 self.val_data.append(data[i])
             else:

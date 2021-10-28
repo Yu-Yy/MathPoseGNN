@@ -59,6 +59,7 @@ JOINTS_DEF = {
     'r-hip': 12,
     'r-knee': 13,
     'r-ankle': 14}
+
 key_name = list(JOINTS_DEF.keys())
 pairs = [[0, 1], [0, 2], [0, 9], [9, 10], [10, 11],
          [0, 3], [3, 4], [4, 5], [2, 12], [12, 13], 
@@ -103,11 +104,10 @@ unified_bones_def14 = [
     [11, 12], [12, 13],  # right leg
 ]
 
-
 File_Name = '/Extra/panzhiyu/CMU_data/keypoints_validation_results.json'
 OFF_FILE = '/home/panzhiyu/project/3d_pose/SMAP/keypoints_validation_results.pkl'
 
-save_dir = '/Extra/panzhiyu/CMU_data/gnn_hm/'
+save_dir = '/Extra/panzhiyu/CMU_data/gnn_testhm_r_new5/'
 
 with open(OFF_FILE,'rb') as f:
     pred_2d_results = pickle.load(f)
@@ -139,6 +139,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     mpjpe_g3d = AverageMeter()
     kp_set_g3d = [AverageMeter() for _ in range(cfg.DATASET.KEYPOINT.NUM)]
     fp_total = FPAverageMeter()
+    precision = FPAverageMeter()
+    recall = FPAverageMeter()
     kp_fp = [FPAverageMeter() for _ in range(cfg.DATASET.KEYPOINT.NUM)]
     shift_size = 3
     root_dir = '/Extra/panzhiyu/CMU_data/'
@@ -163,7 +165,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
         # json_file = os.path.join('/Extra/panzhiyu/CMU_data/cam_para.pkl')
         # with open(json_file, 'wb') as f:
         #     pickle.dump(cam_paras[0], f)
-
         # Select the test set  !!!!
         # c_image = scales[0]['img_paths'][0].split(root_dir)[-1]
         hm_collect = []
@@ -172,6 +173,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
         # if c_image not in pred_2d_results.keys():
         #     continue
         cam_info = dict()
+
         # pose_2d_collect = dict()
         pose_2d_collect = [dict() for _ in range(batch_size)]
         smap_feature = dict()
@@ -266,7 +268,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                         scale['cx'] = scale['img_width']/2
                         scale['cy'] = scale['img_height']/2
 
-
                     hmsIn = outputs_2d[i].contiguous()
                     # if the first pair is [1, 0], uncomment the code below
                     # hmsIn[cfg.DATASET.KEYPOINT.NUM:cfg.DATASET.KEYPOINT.NUM+2] *= -1
@@ -275,8 +276,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
                     hmsIn[cfg.DATASET.KEYPOINT.NUM:] /= 127
                     rDepth = outputs_rd[i][0]
                     # vis the rDepth
-
-
                     pred_bodys_2d = dapalib.connect(hmsIn, rDepth, cfg.DATASET.ROOT_IDX, distFlag=True) # depth-aware part association lib # 存在预测分数
                     
                     if len(pred_bodys_2d) > 0:
@@ -319,7 +318,6 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
 
                     if len(pred_bodys_2d) == 0:
                         continue
-
                     
                     pred_rdepths = generate_relZ(pred_bodys_2d, paf_3d_upsamp, root_d_upsamp, scale, idx_v) # device pred_bodys_2d with relative depth
                     pred_bodys_3d, adjust_2d = gen_3d_pose(pred_bodys_2d, pred_rdepths, scale, idx_v, Kd) # device
@@ -490,13 +488,19 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             pred_bodys_3d = pc_fused_connection(batch_pc, indx_match, select_2d_match, viewidx_match, shift_size,cam_info, pose_2d_collect, pose_2d_related, device, root_idx=0)
             # current pred_3d is Batch * max_people * kp * 4
             # pred_num = pred_bodys_3d.shape[0]
+            # temporally save the reasult
+
+
+
             pred_bodys_3d = pred_bodys_3d.to(device)
             # find the corresponding matched_gt
             matched_pred, matched_gt, matched_pred_single = matchgt(pred_bodys_3d, joints3d_global, pose_2d_related)
+
             gt_bodys_2d = project_views(matched_gt, cam_info) # combine with the out of view information
             hm_collect = torch.cat(hm_collect, dim=0)
-            # import pdb;pdb.set_trace()
+            # # import pdb;pdb.set_trace()
             sampled_heatmap = project_views_samples(pred_bodys_3d, cam_info, scale, hm_collect)
+
 
             # for b in range(batch_size):
             #     matched_pred_b = matched_pred[b,...]
@@ -505,9 +509,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             #     matched_gt_b = matched_gt[b,...]
             #     gt_num  = torch.sum(matched_gt_b[:,0,3]>0)
             #     matched_gt_b = matched_gt_b[:gt_num,...]
-            #     val_match(matched_pred_b,matched_gt_b,mpjpe_g3d)
-            # if mpjpe_g3d.avg > 100:
-            #     mpjpe_g3d.reset()
+            #     val_match(matched_pred_b,matched_gt_b,mpjpe,precision,recall)
+
             # import pdb;pdb.set_trace()
             # print('aaa')
 
@@ -528,7 +531,7 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
             with open(os.path.join(save_dir,file_name), 'wb') as f:
                 pickle.dump(gnn_pair, f)
             save_idx += 1
-            
+
 
             # # the refinenet
             # _, refine_res = gnn_net(pred_bodys_2d, smap_feature, cam_info)
@@ -680,16 +683,16 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
 
     # save the final result in json file
 
-    dir_name = os.path.split(os.path.split(os.path.realpath(__file__))[0])[1]
-    pair_file_name = os.path.join(output_dir, '{}_{}_{}_{}orig.pkl'.format(dir_name, cfg.TEST_MODE,
-                                                                        cfg.DATA_MODE, cfg.JSON_SUFFIX_NAME)) # consider the orig
-    # with open(pair_file_name, 'w') as f:
-    #     json.dump(result, f)
-    with open(pair_file_name, 'wb') as f:
-        pickle.dump(result, f)
-    logger.info("Pairs writed to {}".format(pair_file_name))
+    # dir_name = os.path.split(os.path.split(os.path.realpath(__file__))[0])[1]
+    # pair_file_name = os.path.join(output_dir, '{}_{}_{}_{}orig.pkl'.format(dir_name, cfg.TEST_MODE,
+    #                                                                     cfg.DATA_MODE, cfg.JSON_SUFFIX_NAME)) # consider the orig
+    # # with open(pair_file_name, 'w') as f:
+    # #     json.dump(result, f)
+    # with open(pair_file_name, 'wb') as f:
+    #     pickle.dump(result, f)
+    # logger.info("Pairs writed to {}".format(pair_file_name))
 
-    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'  #
+    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}, precision is {precision.avg}, recall is {recall.avg}'  #
     logger.info(msg)
     # for i in range(kpt_num):
     #     logger.info(f'The {key_name[i]} is {kp_set[i].avg}') # fn
@@ -700,6 +703,8 @@ def generate_3d_point_pairs(model, refine_model, data_loader, cfg, logger, devic
     #     logger.info(f'The {key_name[i]} is {kp_set_g3d[i].avg}') #_g3d
 
     return mpjpe.avg
+
+
 
 def matchgt(pred_3d_batch, gt_3d_batch, pose2d_related):
     batch_size = pred_3d_batch.shape[0]
@@ -755,10 +760,7 @@ def matchgt(pred_3d_batch, gt_3d_batch, pose2d_related):
     return matched_pred, matched_gt, matched_pred2d
 
 
-
-
-        
-
+# temp_save_new = '/Extra/panzhiyu/CMU_data/gnn_test_new'
 
 def easy_mode(pose_file, poserefine, cfg, logger, device, 
                             output_dir='', total_iter='infer'):
@@ -842,7 +844,6 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
             gt_bodys = info['gt_2d']
             image_path = info['image_path']
             # match the hrnet
-
             # idx_path = image_path.split(root_path)[-1]
             # if idx_path in pred_2d_results.keys():
             #     hrnet_pose = pred_2d_results[idx_path]
@@ -951,7 +952,7 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
         # gt_3d = gt_3d[:,[0]+panoptic_to_unified,:]  # It is for hrnet standard
         vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe, precision, recall, ap_threshold=2.5) # output
         _,_ = val_match(refine_bodys_3d.cpu(),gt_3d,mpjpe_refined, precision_r, recall_r, ap_threshold=2.5)
-        _,_ = val_match(refine_bodys_3d2.cpu(),gt_3d,mpjpe_refined2,precision_r2, recall_r2, ap_threshold=2.5) # useless 
+        # _,_ = val_match(refine_bodys_3d2.cpu(),gt_3d,mpjpe_refined2,precision_r2, recall_r2, ap_threshold=2.5) # useless 
         if np.isnan(np.array(mpjpe.val)):
             import pdb; pdb.set_trace()
 
@@ -1044,9 +1045,9 @@ def easy_mode(pose_file, poserefine, cfg, logger, device,
         #     print(f'Flag is {debug_flag}, The debug flag is set True')
         #     debug_flag = 0
             
-    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}'  #
+    msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}, precision is {precision.avg}, recall is {recall.avg}'  #
     logger.info(msg)  
-    msg =  f'EPOCH {total_iter}: The MPJPE_opt is {mpjpe_refined.avg}'  #
+    msg =  f'EPOCH {total_iter}: The MPJPE_opt is {mpjpe_refined.avg}, precision is {precision_r.avg}, recall is {recall_r.avg}'  #
     logger.info(msg) 
     return  mpjpe_refined.avg
 
@@ -1059,8 +1060,8 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
     with open(pose_file,'rb') as f:
         ready_pose = pickle.load(f)
 
-    view_num = 3
-    cam_file = '/Extra/panzhiyu/CampusSeq1/cam_para.pkl'  # for campus test
+    view_num = 5
+    cam_file = '/Extra/panzhiyu/Shelf/cam_para.pkl'  # for campus test
     with open(cam_file, 'rb') as f:
         cam_para = pickle.load(f)
     init_num = 2000
@@ -1075,15 +1076,15 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
 
     shift_size = 3 # shift size is 1
     scale = dict()
-    scale['img_width'] = 360 # TODO 1032
-    scale['img_height'] = 288 # 776
+    scale['img_width'] = 1032 # TODO  360
+    scale['img_height'] = 776 #  288
     mpjpe = AverageMeter()
     mpjpe_orig = [AverageMeter() for _ in range(view_num)]
     precision = FPAverageMeter()
     recall = FPAverageMeter()
     precision_orig = [FPAverageMeter() for _ in range(view_num)]
     recall_orig = [FPAverageMeter() for _ in range(view_num)]
-
+    shelf_test_set = []
     for i in tqdm(range(max_length)):
         current_num = init_num + i
         per_frame_info = dict()
@@ -1091,6 +1092,8 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
             if current_num in ready_pose[v].keys():
                 per_frame_info[v] = ready_pose[v][current_num]
                 gt_joints = np.array(ready_pose[v][current_num]['gt_global'])
+
+        
         c_view_num = len(per_frame_info.keys())
         if c_view_num <= 1: 
             continue
@@ -1157,7 +1160,6 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
             gt_3d = gt_3d[:gt_num, ...]
             gt_3d[...,:3] = gt_3d[...,:3] * 100
             _,_ = val_match(single_3d,gt_3d,mpjpe_orig[view], precision_orig[view], recall_orig[view])
-
 
             generate_pc_connection(pose_2d, cam_p, scale, batch_pc, indx_match, select_2d_match, viewidx_match, view, 0, shift_size, root_idx=2) #adjust_2dcmu_pred_2d
 
@@ -1226,6 +1228,7 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
         gt_3d = gt_3d[:gt_num, ...]
         gt_3d[...,:3] = gt_3d[...,:3] * 100
         vis_label, filtered_pose = val_match(pred_bodys_3d.cpu(),gt_3d,mpjpe, precision, recall) # output # unit is meter  
+        # shelf_test_set.append(current_num)
         # for view in per_frame_info.keys():
         #     cmp_3d = pose_2d_related[view][0,:pred_num,:,:3]
 
@@ -1234,11 +1237,18 @@ def easy_mode_cross(pose_file, poserefine, cfg, logger, device,
         #     _,_ = val_match(cmp_3d,gt_3d,mpjpe_orig[view])
 
 
+    # file_shelf = '/Extra/panzhiyu/Shelf/shelf_test_range.pkl'
+    # with open(file_shelf, 'wb') as f:
+    #     pickle.dump(shelf_test_set, f)
+
+    import pdb;pdb.set_trace()
     msg =  f'EPOCH {total_iter}: The MPJPE is {mpjpe.avg}, Precision {precision.avg}, Recall {recall.avg}'  #
     logger.info(msg)  
     for v in range(view_num):
         msg =  f'EPOCH {total_iter}: The MPJPE orig {v} is {mpjpe_orig[v].avg}, Precision {precision_orig[v].avg}, Recall {recall_orig[v].avg}'  #
         logger.info(msg)
+
+
 
 
 def refine_2dgt(pred_2d, gt2d, threshold=50):
@@ -1531,7 +1541,7 @@ def val_fn(pred_3d_total, gt_3d, mpjpe, kp_set, threshold=500): # FN
     return vis_label    
 
 
-def val_match(pred_3d_total, gt_3d, mpjpe, precision, recall, threshold=50, ap_threshold=100): # FN
+def val_match(pred_3d_total, gt_3d, mpjpe, precision, recall, threshold=50, ap_threshold=50): # FN
     # need to put in the CPU eval
     pred_3d = pred_3d_total[...,:3] # N X K X 3
     pred_vis = pred_3d_total[...,3] # N X K
@@ -1722,7 +1732,7 @@ def main():
         pose_file = os.path.join('/home/panzhiyu/project/3d_pose/SMAP/model_logs_0821/stage3_root2/validation_result/','stage3_root2_generate_result_test_orig.pkl')
         easy_mode(pose_file, poserefine ,cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
     elif  args.test_mode == "cross":
-        pose_file = os.path.join('/Extra/panzhiyu/CampusSeq1','smap_result_new.pkl')
+        pose_file = os.path.join('/Extra/panzhiyu/Shelf','shelf_result_new.pkl')
         easy_mode_cross(pose_file, None ,cfg, logger, device, output_dir=os.path.join(cfg.OUTPUT_DIR, "validation_result"))
 
     else:

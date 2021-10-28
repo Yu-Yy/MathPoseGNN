@@ -17,22 +17,14 @@ import torch
 import torchvision.transforms as transforms
 import glob
 from tqdm import tqdm
+import numpy as np
+import sys
+if sys.version_info[0] == 2:
+    import xml.etree.cElementTree as ET
+else:
+    import xml.etree.ElementTree as ET
+namestr = ['CVLab1','CVLab2','CVLab3','CVLab4','IDIAP1','IDIAP2','IDIAP3']
 
-TRAIN_LIST = [
-    '160422_ultimatum1',
-    '160224_haggling1',
-    '160226_haggling1',
-    '161202_haggling1',
-    '160906_ian1',
-    '160906_ian2',
-    '160906_ian3',
-    '160906_band1',
-    '160906_band2',
-    '160906_band3',
-]
-VAL_LIST = ['160906_pizza1', '160422_haggling1', '160906_ian5', '160906_band4']
-
-# CAMERA_NUMBER = (3,6,12,13,23)
 
 CONNS =  [[0, 1],
          [0, 2],
@@ -49,11 +41,11 @@ CONNS =  [[0, 1],
          [12, 13],
          [13, 14]] # only 15 keypoints
 
-# '/Extra/panzhiyu/CMU_data/'
-class Panoptic_Depth:
+
+class Wildtrack:
     def __init__(self, image_folder, keypoint_folder, view_set,is_train = True): # TODO add keypoint foldercfg,
         self.view_set = view_set
-        self.cam_list = [(0,x) for x in self.view_set] # get the HD images (0,)
+        # self.cam_list = [(0,x) for x in self.view_set] # get the HD images (0,)
         self.view_num = len(self.view_set)
         self.image_folder = image_folder
         # self.transform = transform
@@ -70,57 +62,79 @@ class Panoptic_Depth:
         # self.sigma = 4 #cfg.NETWORK.SIGMA
         # self.single_size = 512*424
         self.istrain = is_train
-        if is_train:
-            self.scene_list = TRAIN_LIST
-        else:
-            self.scene_list = VAL_LIST # TODO: for gnn VAL_LIST
         # 读取k_calibration, ksync, 以depth 为准对齐一次即可
-        self.scene_num = len(self.scene_list)
+        # self.scene_num = len(self.scene_list)
 
-        self.calib_data = []
-        # Using the HD images 
-
-        for scene in self.scene_list:
-            with open(os.path.join(image_folder,scene,f'calibration_{scene}.json'),'rb') as dfile:
-                self.calib_data.append(json.load(dfile))
-        
         # calculate the total frame idx for the specific idx
         # read in the keypoint file as the order
-        self.kp3d_list = [osp.join(keypoint_folder, x, 'hdPose3d_stage1_coco19') for x in self.scene_list]
-        self.anno_kp_files = []
-        self.num_pers = []
-        for kp_anno in self.kp3d_list:
-            self.anno_kp_files.append(sorted(glob.iglob('{:s}/*.json'.format(kp_anno)))) 
-            self.num_pers.append(len(self.anno_kp_files[-1]))
+        self.kpfiles = os.listdir(keypoint_folder)
+        self.kpfiles.sort(key=lambda x:int(x.split('.')[0]))
 
-        # self.anno_kp_files = np.array(self.anno_kp_files)
+        self.camera_parameters = self._get_cam()
+        self.max_people = 40
 
-        self.num_pers = np.array(self.num_pers)
-        self.until_sum = np.cumsum(self.num_pers)
 
-        # get the camera parameters
-        self.camera_parameters = []
-        for scene in self.scene_list:
-            self.camera_parameters.append(self._get_cam(scene))
-        
-        self.max_people = 10
-        self.dataset_len = int(np.sum(self.num_pers))
-
-    def _get_cam(self, scene):
-        cam_file = osp.join(self.image_folder, scene, 'calibration_{:s}.json'.format(scene))  # It is actually not related to the scene
-        with open(cam_file) as cfile:
-            calib = json.load(cfile)
-
+    def _get_cam(self):
         cameras = {}
-        for cam in calib['cameras']:
-            if (cam['panel'], cam['node']) in self.cam_list: # camera 位置信息的选择 （panel, node） 当前，视角就是Node决定
-                sel_cam = {}
-                sel_cam['K'] = np.array(cam['K'])
-                sel_cam['distCoef'] = np.array(cam['distCoef'])
-                sel_cam['R'] = np.array(cam['R']) #.dot(M)  # 旋转矩阵要处理一下 （坐标设置跟投影矩阵不匹配？）
-                sel_cam['t'] = np.array(cam['t']).reshape((3, 1))
-                cameras[(cam['panel'], cam['node'])] = sel_cam
-        return cameras
+        for cam in self.view_set:
+            sel_cam = {}
+            root = ET.parse('/home/fbh/wildtrackdataset/Wildtrack_dataset/calibrations/extrinsic/extr_'+namestr[cam]+'.xml').getroot()
+            R = root[0].text
+            R = R.replace('\n', '')
+            R = R.split(' ')
+            Rm = []
+            for str in R:
+                if str!='':
+                    Rm.append(float(str))
+            rx = Rm[0]
+            Rx = np.zeros([3,3])
+            Rx[0,0] = 1
+            Rx[1,1] = np.cos(rx)
+            Rx[2,1] = np.sin(rx)
+            Rx[1,2] = -np.sin(rx)
+            Rx[2,2] = np.cos(rx)
+
+            ry = Rm[1]
+            Ry = np.zeros([3, 3])
+            Ry[0, 0] = np.cos(ry)
+            Ry[1, 1] = 1
+            Ry[2, 0] = -np.sin(ry)
+            Ry[0, 2] = np.sin(ry)
+            Ry[2, 2] = np.cos(ry)
+
+            rz = Rm[2]
+            Rz = np.zeros([3, 3])
+            Rz[0, 0] = np.cos(rz)
+            Rz[0, 1] = -np.sin(rz)
+            Rz[1, 0] = np.sin(rz)
+            Rz[1, 1] = np.cos(rz)
+            Rz[2, 2] = 1
+            Rs = np.dot(np.dot(Rx,Ry),Rz)
+            sel_cam['R'] = Rs
+            # extr[:,0:3,i] = Rs
+            t = root[1].text
+            t = t.replace('\n', '')
+            t = t.split(' ')
+            tm = []
+            for str in t:
+                if str!='':
+                    tm.append(float(str))
+            Ts = np.stack(tm)
+            sel_cam['t'] = Ts.reshape((3, 1))
+            # extr[:,3,i] = np.stack(tm)
+            sel_cam['distCoef'] = np.zeros(5)
+            root = ET.parse('/home/fbh/wildtrackdataset/Wildtrack_dataset/calibrations/intrinsic_zero/intr_' + namestr[cam] + '.xml').getroot() # zero
+            R = root[0][3].text
+            R = R.replace('\n', '')
+            R = R.split(' ')
+            Rm = []
+            for str in R:
+                if str != '':
+                    Rm.append(float(str))
+            Rm = np.stack(Rm,axis = 0)
+            Rm = np.reshape(Rm,[3,3])
+            sel_cam['K'] = Rm
+            # intr[:,:,i] = Rm
 
 
     def __len__(self):
@@ -261,14 +275,12 @@ class Panoptic_Depth:
     
 
 if __name__ == '__main__':
-    img_path = '/Extra/panzhiyu/CMU_data/'
-    kp_path = '/Extra/panzhiyu/CMU_data/'
-    # view_set = [3,6,12,13,23]
-    view_set = [1,5,7,15,20]
+    img_path = '/Extra/fanbohao/fbh_data/wildtrackdataset/Wildtrack_dataset/Image_subsets/'
+    kp_path = '/Extra/fanbohao/fbh_data/wildtrackdataset/Wildtrack_dataset/annotations_positions/'
+    view_set = [0,1,2,3,4,5,6]
 
-    depth_data_train = Panoptic_Depth(img_path, kp_path, view_set,is_train = False)
-    # depth_data_test = Panoptic_Depth(img_path, kp_path, view_set,is_train = False)
+    depth_data_train = Wildtrack(img_path, kp_path, view_set,is_train = False)
     depth_data_train.__generate_meta__()
-    # depth_data_test.__generate_meta__()
+
 
 

@@ -103,7 +103,19 @@ class Pose_GCN(nn.Module): # This is the regression module
         # perform the cross attention along with views and init3d
         self.encode_score = nn.Sequential(nn.Linear(self.single_view_layers[-1]+1,self.single_view_layers[-1]), nn.ReLU())
         self.cross_attention = MultiheadAttention(embed_dim = self.init3d_layers[-1], num_heads = 4, dropout=0.5)
-        self.layerNorm = nn.LayerNorm(self.init3d_layers[-1])
+        self.layerNorm_cross = nn.LayerNorm(self.init3d_layers[-1])
+        self.self_attention = MultiheadAttention(embed_dim = self.init3d_layers[-1], num_heads = 4, dropout=0.5) # update each view's feature
+        self.layerNorm_self = nn.LayerNorm(self.single_view_layers[-1])
+        self.single_update = [256, 128, 128, 32, 32]
+        self.signle_upconvlayers = nn.ModuleList()
+        self.single_upbn = nn.ModuleList()
+        self.single_upac = nn.ModuleList()
+        for l in range(len(self.single_update) - 1):
+            self.signle_upconvlayers.append(GCNConv(self.single_update[l], self.single_update[l+1]))
+            self.single_upbn.append(nn.BatchNorm1d(self.single_update[l+1]))
+            self.single_upac.append(nn.ReLU())
+        self.single_outlayer = nn.Linear(self.single_update[-1], 3)
+        
         # After fuse the feature and do the residue add 
         self.final3d_layers = [256, 128, 128, 32, 32]
         self.final_convlayers = nn.ModuleList()
@@ -151,6 +163,7 @@ class Pose_GCN(nn.Module): # This is the regression module
         batch_mean_single = batch_mean.repeat(view_num,1,1)
         single_view_feature = pose_single_view.clone() # N x K x 7
         single_view_feature[single_valid_people,:,:3] = (single_view_feature[single_valid_people,:,:3]/ self.scalar) - batch_mean_single
+        pose_single_view_bak = single_view_feature.reshape(view_num, -1, cfg.DATASET.KEYPOINT.NUM, self.inplaneS).clone()
         single_view_feature = single_view_feature.reshape(-1,7)
         init_graph_weight = (pose_single_view[...,6] > 0.3)  # just 0 and 1, dropped the zero predict point
         input_graph_weight = init_graph_weight.reshape(-1)
@@ -177,7 +190,7 @@ class Pose_GCN(nn.Module): # This is the regression module
         init_3d_pos = torch.cat([init_3d_pos, init_3d_weight.float().unsqueeze(-1)], dim=-1)
         
         for l in range(len(self.init3d_layers)-1):
-            pass_init = self.init_convlayers[l](init_3d_pos, batch_edge3d_index.t().contiguous()) #, init_edge_weight
+            pass_init = self.init_convlayers[l](init_3d_pos, batch_edge3d_index.t().contiguous()) #
             bn_init = pass_init.reshape(-1,cfg.DATASET.KEYPOINT.NUM, self.init3d_layers[l+1]).permute(0,2,1)
             bn_init = self.init_bn[l](bn_init)
             ac_init = self.init_ac[l](bn_init)
@@ -187,13 +200,50 @@ class Pose_GCN(nn.Module): # This is the regression module
         # view_feature is V, N, K ,64; init_3d_feature 1, N, K, 64  -->  1, NK, 64; 
         q_feature = init_3d_feature.reshape(1, -1, self.init3d_layers[-1]) # 1, NK, 64
         t_feature = encode_feature.reshape(view_num, -1, self.single_view_layers[-1]) # V, NK, 64
-        fuse_feature = self.cross_attention(q_feature, t_feature, t_feature)[0]
+        # update the t_feature
+        v_feature = encode_feature.reshape(view_num, -1, self.single_view_layers[-1])
+        new_v_feature = []
+        refined_single_pos = []
+        for v in range(view_num):
+            view_list = list(range(view_num))
+            q_single_feature = v_feature[v:v+1,...]
+            t_signle_feature = v_feature[view_list.remove(v),...]
+            update_feature = self.self_attention(q_single_feature, t_signle_feature, t_signle_feature)[0]
+            update_feature = update_feature + q_single_feature
+            update_feature = self.layerNorm_self(update_feature)
+            new_v_feature.append(update_feature.clone())
+            # set the update
+            current_pos = pose_single_view_bak[v,:,:,:3]
+            update_weight = (pose_single_view_bak[v,:,:,6] > 0.3)
+            update_weight = update_weight.reshape(-1)
+            update_edge_weight = update_weight[batch_edge3d_index[:,0]].float()
+            update_feature = update_feature.reshape(-1, self.single_update[0])
+            for l in range(len(self.single_update)-1):
+                pass_single_update = self.signle_upconvlayers[l](update_feature, batch_edge3d_index.t().contiguous())
+                bn_single_up = pass_single_update.reshape(-1, cfg.DATASET.KEYPOINT.NUM, self.single_update[l+1]).permute(0,2,1)
+                bn_single_up = self.single_upbn[l](bn_single_up)
+                ac_single_up = self.single_upac[l](bn_single_up)
+                update_feature = ac_single_up.permute(0,2,1).reshape(-1, self.single_update[l+1])
+            update_feature = update_feature.reshape(-1, cfg.DATASET.KEYPOINT.NUM, self.single_update[-1])
+            update_output = self.single_outlayer(update_feature)
+            # restrain the residue or not 
+            refined_pos_single = current_pos + update_output
+            refined_pos_single[valid_people,...] = refined_pos_single[valid_people,...] + batch_mean
+            refined_pos_single = refined_pos_single * self.scalar
+            refined_pos_single = refined_pos_single.reshape(batch_size, -1, cfg.DATASET.KEYPOINT.NUM, 3)
+            refined_single_pos.append(refined_pos_single.unsqueeze(0))
+        
+        new_v_feature = torch.cat(new_v_feature, dim=0)
+        refined_single_pos = torch.cat(refined_single_pos, dim=0)
+        new_v_feature = new_v_feature.reshape(view_num, -1, self.single_view_layers[-1])
+
+        fuse_feature = self.cross_attention(q_feature, new_v_feature, new_v_feature)[0] # t_feature
         final_feature = fuse_feature + q_feature
-        final_feature = self.layerNorm(final_feature) # 1 NK 64
+        final_feature = self.layerNorm_cross(final_feature) # 1 NK 64
         final_feature = final_feature.reshape(-1,self.final3d_layers[0])
         # final layer
         for l in range(len(self.final3d_layers)-1):
-            pass_final = self.final_convlayers[l](final_feature, batch_edge3d_index.t().contiguous()) #, init_edge_weight
+            pass_final = self.final_convlayers[l](final_feature, batch_edge3d_index.t().contiguous()) #
             bn_final = pass_final.reshape(-1,cfg.DATASET.KEYPOINT.NUM, self.final3d_layers[l+1]).permute(0,2,1)
             bn_final = self.final_bn[l](bn_final)
             ac_final = self.final_ac[l](bn_final)
@@ -209,7 +259,7 @@ class Pose_GCN(nn.Module): # This is the regression module
         refined_pose = refined_pose * self.scalar
         refined_pose = refined_pose.reshape(batch_size, -1, cfg.DATASET.KEYPOINT.NUM, 3)
 
-        return refined_pose, abs_residue
+        return refined_pose, abs_residue, refined_single_pos
 
 if __name__ == '__main__':
     device = torch.device('cuda')

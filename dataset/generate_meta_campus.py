@@ -130,7 +130,7 @@ class Campus_Depth:
         for cam in self.view_set:
             sel_cam = {}
             sel_cam['R'] = np.array(calib[f'{cam}']['R'])
-            sel_cam['t'] = np.array(calib[f'{cam}']['T']) 
+            sel_cam['t'] = np.array(calib[f'{cam}']['t']) 
             sel_cam['distCoef'] = np.zeros(5)
             sel_cam['K'] = np.array([[calib[f'{cam}']['fx'],0,calib[f'{cam}']['cx']],[0,calib[f'{cam}']['fy'], calib[f'{cam}']['cy']],[0,0,1]])
             # sel_cam['fx'] = np.array(calib[f'{cam}']['fx'])
